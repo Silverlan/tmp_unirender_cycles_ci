@@ -8,9 +8,9 @@
 #ifndef __UNIRENDER_CYCLES_SCENE_HPP__
 #define __UNIRENDER_CYCLES_SCENE_HPP__
 
-#include <util_raytracing/object.hpp>
-#include <util_raytracing/renderer.hpp>
-#include <util_raytracing/scene.hpp>
+#include "../object.hpp"
+#include "../renderer.hpp"
+#include "../scene.hpp"
 #include <render/session.h>
 #include <cinttypes>
 #include <atomic>
@@ -18,8 +18,8 @@
 namespace unirender {class Scene; namespace cycles {class Renderer;};};
 namespace unirender::cycles
 {
-	void compute_tangents(ccl::Mesh *mesh,bool need_sign,bool active_render);
-	class Renderer
+	DLLRTUTIL void compute_tangents(ccl::Mesh *mesh,bool need_sign,bool active_render);
+	class DLLRTUTIL Renderer
 		: public unirender::Renderer
 	{
 	public:
@@ -68,9 +68,6 @@ namespace unirender::cycles
 
 		std::shared_ptr<CCLShader> GetCachedShader(const GroupNodeDesc &desc) const;
 		void AddShader(CCLShader &shader,const GroupNodeDesc *optDesc=nullptr);
-
-		static void UpdateRenderTile(TileManager &tileManager,const ccl::RenderTile &tile,bool param);
-		static void WriteRenderTile(TileManager &tileManager,const ccl::RenderTile &tile);
 
 		// For internal use only
 		void SetStereoscopicEye(StereoEye eye);

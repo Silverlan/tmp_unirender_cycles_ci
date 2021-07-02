@@ -2186,10 +2186,11 @@ void unirender::cycles::Renderer::WriteRenderTile(unirender::TileManager &tileMa
 }
 
 extern "C" {
-	std::shared_ptr<unirender::Renderer> __declspec(dllexport) create_renderer(const unirender::Scene &scene,unirender::Renderer::Flags flags)
+	bool __declspec(dllexport) create_renderer(const unirender::Scene &scene,unirender::Renderer::Flags flags,std::shared_ptr<unirender::Renderer> &outRenderer)
 	{
 		unirender::Scene::SetKernelPath(util::get_program_path() +"/modules/cycles");
-		return Renderer::Create(scene,flags);
+		outRenderer = Renderer::Create(scene,flags);
+		return outRenderer != nullptr;
 	}
 };
 #pragma optimize("",on)

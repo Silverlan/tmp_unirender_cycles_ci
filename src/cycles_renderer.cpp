@@ -781,21 +781,21 @@ std::shared_ptr<uimg::ImageBuffer> unirender::cycles::Renderer::FinalizeCyclesSc
 		if(outputWithHDR)
 		{
 			auto *pixels = m_cclSession->display->rgba_half.copy_from_device(0, w, h);
-			imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::ImageBuffer::Format::RGBA_HDR,false);
+			imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::Format::RGBA_HDR,false);
 		}
 		else
 		{
 			if(sceneInfo.exposure == 1.f)
 			{
 				auto *pixels = m_cclSession->display->rgba_byte.copy_from_device(0, w, h);
-				imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::ImageBuffer::Format::RGBA_LDR,false);
+				imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::Format::RGBA_LDR,false);
 			}
 			else
 			{
 				auto *pixels = m_cclSession->display->rgba_half.copy_from_device(0, w, h);
-				imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::ImageBuffer::Format::RGBA_HDR,false);
+				imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::Format::RGBA_HDR,false);
 				imgBuffer->ApplyExposure(sceneInfo.exposure);
-				imgBuffer->Convert(uimg::ImageBuffer::Format::RGBA_LDR);
+				imgBuffer->Convert(uimg::Format::RGBA_LDR);
 			}
 		}
 	}
@@ -1738,7 +1738,7 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 		m_cclSession->reset(const_cast<ccl::BufferParams&>(bufferParams), m_cclSession->params.samples);
 		m_cclSession->update_scene();
 
-		auto imgBuffer = uimg::ImageBuffer::Create(imgWidth,imgHeight,uimg::ImageBuffer::Format::RGBA_FLOAT);
+		auto imgBuffer = uimg::ImageBuffer::Create(imgWidth,imgHeight,uimg::Format::RGBA_FLOAT);
 		std::atomic<bool> running = true;
 		//session->progress.set_update_callback(
 		std::thread progressThread {[this,&worker,&running]() {
@@ -1850,7 +1850,7 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 		{
 			worker.SetResultMessage("Baking margin...");
 
-			imgBuffer->Convert(uimg::ImageBuffer::Format::RGBA_FLOAT);
+			imgBuffer->Convert(uimg::Format::RGBA_FLOAT);
 			unirender::baking::ImBuf ibuf {};
 			ibuf.x = imgWidth;
 			ibuf.y = imgHeight;
@@ -1878,7 +1878,7 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 		{
 			for(auto &pxView : *imgBuffer)
 			{
-				for(auto channel : {uimg::ImageBuffer::Channel::Red,uimg::ImageBuffer::Channel::Green,uimg::ImageBuffer::Channel::Blue})
+				for(auto channel : {uimg::Channel::Red,uimg::Channel::Green,uimg::Channel::Blue})
 					pxView.SetValue(channel,pxView.GetFloatValue(channel) *exposure);
 			}
 		}
@@ -1886,14 +1886,14 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 		if(umath::is_flag_set(m_scene->GetStateFlags(),Scene::StateFlags::OutputResultWithHDRColors) == false)
 		{
 			// Convert baked data to rgba8
-			auto imgBufLDR = imgBuffer->Copy(uimg::ImageBuffer::Format::RGBA_LDR);
-			auto numChannels = umath::to_integral(uimg::ImageBuffer::Channel::Count);
+			auto imgBufLDR = imgBuffer->Copy(uimg::Format::RGBA_LDR);
+			auto numChannels = umath::to_integral(uimg::Channel::Count);
 			auto itSrc = imgBuffer->begin();
 			for(auto &pxViewDst : *imgBufLDR)
 			{
 				auto &pxViewSrc = *itSrc;
 				for(auto i=decltype(numChannels){0u};i<numChannels;++i)
-					pxViewDst.SetValue(static_cast<uimg::ImageBuffer::Channel>(i),baking::unit_float_to_uchar_clamp(pxViewSrc.GetFloatValue(static_cast<uimg::ImageBuffer::Channel>(i))));
+					pxViewDst.SetValue(static_cast<uimg::Channel>(i),baking::unit_float_to_uchar_clamp(pxViewSrc.GetFloatValue(static_cast<uimg::Channel>(i))));
 				++itSrc;
 			}
 			imgBuffer = imgBufLDR;
@@ -1904,14 +1904,14 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 		else
 		{
 			// Image data is float data, but we only need 16 bits for our purposes
-			auto imgBufHDR = imgBuffer->Copy(uimg::ImageBuffer::Format::RGBA_HDR);
-			auto numChannels = umath::to_integral(uimg::ImageBuffer::Channel::Count);
+			auto imgBufHDR = imgBuffer->Copy(uimg::Format::RGBA_HDR);
+			auto numChannels = umath::to_integral(uimg::Channel::Count);
 			auto itSrc = imgBuffer->begin();
 			for(auto &pxViewDst : *imgBufHDR)
 			{
 				auto &pxViewSrc = *itSrc;
 				for(auto i=decltype(numChannels){0u};i<numChannels;++i)
-					pxViewDst.SetValue(static_cast<uimg::ImageBuffer::Channel>(i),static_cast<uint16_t>(umath::float32_to_float16_glm(pxViewSrc.GetFloatValue(static_cast<uimg::ImageBuffer::Channel>(i)))));
+					pxViewDst.SetValue(static_cast<uimg::Channel>(i),static_cast<uint16_t>(umath::float32_to_float16_glm(pxViewSrc.GetFloatValue(static_cast<uimg::Channel>(i)))));
 				++itSrc;
 			}
 			imgBuffer = imgBufHDR;
@@ -2154,10 +2154,13 @@ util::ParallelJob<std::shared_ptr<uimg::ImageBuffer>> unirender::cycles::Rendere
 
 void unirender::cycles::Renderer::UpdateRenderTile(unirender::TileManager &tileManager,const ccl::RenderTile &tile,bool param)
 {
-	assert((tile.x %m_tileSize.x) == 0 && (tile.y %m_tileSize.y) == 0);
-	if((tile.x %m_tileSize.x) != 0 || (tile.y %m_tileSize.y) != 0)
+	auto tileSize = tileManager.GetTileSize();
+	auto numTilesPerAxis = tileManager.GetTilesPerAxisCount();
+
+	assert((tile.x %tileSize.x) == 0 && (tile.y %tileSize.y) == 0);
+	if((tile.x %tileSize.x) != 0 || (tile.y %tileSize.y) != 0)
 		throw std::invalid_argument{"Unexpected tile size"};
-	auto tileIndex = tile.x /m_tileSize.x +(tile.y /m_tileSize.y) *m_numTilesPerAxis.x;
+	auto tileIndex = tile.x /tileSize.x +(tile.y /tileSize.y) *numTilesPerAxis.x;
 	unirender::TileManager::TileData data {};
 	data.x = tile.x;
 	data.y = tile.y;
@@ -2166,19 +2169,21 @@ void unirender::cycles::Renderer::UpdateRenderTile(unirender::TileManager &tileM
 	data.data.resize(tile.w *tile.h *sizeof(Vector4));
 	data.w = tile.w;
 	data.h = tile.h;
-	if(m_cpuDevice == false)
+	if(tileManager.IsCpuDevice() == false)
 		tile.buffers->copy_from_device(); // TODO: Is this the right way to do this?
-	tile.buffers->get_pass_rect("combined",m_exposure,tile.sample,4,reinterpret_cast<float*>(data.data.data()));
+	tile.buffers->get_pass_rect("combined",tileManager.GetExposure(),tile.sample,4,reinterpret_cast<float*>(data.data.data()));
 	// We want to minimize the overhead on this thread as much as possible (to avoid stalling Cycles), so we'll continue with post-processing on yet another thread
-	m_inputTileMutex.lock();
-		auto &inputTile = m_inputTiles[tileIndex];
+	auto &inputTileMutex = tileManager.GetInputTileMutex();
+	auto &inputTileQueue = tileManager.GetInputTileQueue();
+	inputTileMutex.lock();
+		auto &inputTile = tileManager.GetInputTiles()[tileIndex];
 		if(tile.sample > inputTile.sample || inputTile.sample == std::numeric_limits<decltype(inputTile.sample)>::max())
 		{
 			inputTile = std::move(data);
-			m_inputTileQueue.push(tileIndex);
-			NotifyPendingWork();
+			inputTileQueue.push(tileIndex);
+			tileManager.NotifyPendingWork();
 		}
-	m_inputTileMutex.unlock();
+	inputTileMutex.unlock();
 }
 void unirender::cycles::Renderer::WriteRenderTile(unirender::TileManager &tileManager,const ccl::RenderTile &tile)
 {
@@ -2189,7 +2194,7 @@ extern "C" {
 	bool __declspec(dllexport) create_renderer(const unirender::Scene &scene,unirender::Renderer::Flags flags,std::shared_ptr<unirender::Renderer> &outRenderer)
 	{
 		unirender::Scene::SetKernelPath(util::get_program_path() +"/modules/cycles");
-		outRenderer = Renderer::Create(scene,flags);
+		outRenderer = unirender::cycles::Renderer::Create(scene,flags);
 		return outRenderer != nullptr;
 	}
 };

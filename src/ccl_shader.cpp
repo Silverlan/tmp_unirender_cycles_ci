@@ -16,8 +16,6 @@
 #include <render/scene.h>
 #include <render/nodes.h>
 #include <OpenImageIO/ustring.h>
-#undef __UTIL_STRING_H__
-#include <sharedutils/util_string.h>
 
 #pragma optimize("",off)
 ccl::NodeMathType unirender::cycles::to_ccl_type(unirender::nodes::math::MathType type)

@@ -9,7 +9,7 @@
 #define __CCL_SHADER_HPP__
 
 #include <util_raytracing/shader.hpp>
-#include <render/nodes.h>
+#include <scene/shader_nodes.h>
 #include <sharedutils/datastream.h>
 #include <sharedutils/util_virtual_shared_from_this.hpp>
 

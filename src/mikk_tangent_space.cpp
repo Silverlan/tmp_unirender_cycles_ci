@@ -18,9 +18,9 @@
 
 #include "util_raytracing/mesh.hpp"
 #include "unirender/cycles/renderer.hpp"
-#include <render/mesh.h>
+#include <scene/mesh.h>
 #include <mikktspace.h>
-
+#if 0
 struct MikkUserData {
   MikkUserData(
                const char *layer_name,
@@ -198,10 +198,11 @@ static void mikk_set_tangent_space(const SMikkTSpaceContext *context,
     userdata->tangent_sign[corner_index] = sign;
   }
 }
-
+#endif
 void unirender::cycles::compute_tangents(
     ccl::Mesh *mesh, bool need_sign, bool active_render)
 {
+#if 0
     const char *layer_name = nullptr;
   /* Create tangent attributes. */
   ccl::AttributeSet &attributes = (mesh->subd_faces.size()) ? mesh->subd_attributes : mesh->attributes;
@@ -260,4 +261,5 @@ void unirender::cycles::compute_tangents(
   context.m_pInterface = &sm_interface;
   /* Compute tangents. */
   genTangSpaceDefault(&context);
+#endif
 }

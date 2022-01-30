@@ -17,7 +17,7 @@
 #ifndef __PR_CYCLES_UTIL_BAKING_HPP__
 #define __PR_CYCLES_UTIL_BAKING_HPP__
 
-#include "render/bake.h"
+#include "scene/bake.h"
 #include <util_image_buffer.hpp>
 #include <cinttypes>
 #include <vector>
@@ -44,10 +44,10 @@ namespace unirender
 		} ImBuf;
 
 		void prepare_bake_data(const cycles::Renderer &renderer,Object &o,BakePixel *pixelArray,uint32_t numPixels,uint32_t imgWidth,uint32_t imgHeight,bool useLightmapUvs=false);
-		void populate_bake_data(ccl::BakeData *data,
+		/*void populate_bake_data(ccl::BakeData *data,
 			const int object_id,
 			BakePixel *pixel_array,
-			const int num_pixels);
+			const int num_pixels);*/
 		unsigned char unit_float_to_uchar_clamp(float val);
 		unsigned short unit_float_to_ushort_clamp(float val);
 		void RE_bake_mask_fill(const std::vector<BakePixel> pixel_array, const size_t num_pixels, char *mask);

@@ -11,10 +11,10 @@
 #include "util_raytracing/mesh.hpp"
 #include "util_raytracing/exception.hpp"
 #include "unirender/cycles/renderer.hpp"
-#include <render/shader.h>
-#include <render/graph.h>
-#include <render/scene.h>
-#include <render/nodes.h>
+#include <scene/shader.h>
+#include <scene/shader_graph.h>
+#include <scene/scene.h>
+#include <scene/shader_nodes.h>
 #include <OpenImageIO/ustring.h>
 
 #pragma optimize("",off)
@@ -189,15 +189,13 @@ ccl::ClosureType unirender::cycles::to_ccl_type(unirender::ClosureType type)
 	{
 	case unirender::ClosureType::BsdfMicroFacetMultiGgxGlass:
 		return ccl::ClosureType::CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID;
-	case unirender::ClosureType::BssrdfPrincipled:
-		return ccl::ClosureType::CLOSURE_BSDF_BSSRDF_PRINCIPLED_ID;
 	case unirender::ClosureType::BsdfDiffuseToon:
 		return ccl::ClosureType::CLOSURE_BSDF_DIFFUSE_TOON_ID;
 	case unirender::ClosureType::BsdfMicroFacetGgxGlass:
 		return ccl::ClosureType::CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID;
 	}
 	static_assert(umath::to_integral(unirender::EnvironmentProjection::Equirectangular) == ccl::NodeEnvironmentProjection::NODE_ENVIRONMENT_EQUIRECTANGULAR && umath::to_integral(unirender::EnvironmentProjection::MirrorBall) == ccl::NodeEnvironmentProjection::NODE_ENVIRONMENT_MIRROR_BALL);
-	static_assert(umath::to_integral(unirender::ClosureType::Count) == 5);
+	static_assert(umath::to_integral(unirender::ClosureType::Count) == 4);
 }
 
 ccl::ImageAlphaType unirender::cycles::to_ccl_type(unirender::nodes::image_texture::AlphaType type)
@@ -368,7 +366,7 @@ std::shared_ptr<unirender::CCLShader> unirender::CCLShader::Create(cycles::Rende
 		if(shader)
 			return shader;
 	}
-	cclShader.volume_sampling_method = ccl::VOLUME_SAMPLING_MULTIPLE_IMPORTANCE;
+	cclShader.set_volume_sampling_method(ccl::VOLUME_SAMPLING_MULTIPLE_IMPORTANCE);
 
 	ccl::ShaderGraph *graph = new ccl::ShaderGraph();
 	auto pShader = std::shared_ptr<CCLShader>{new CCLShader{renderer,cclShader,*graph}};
@@ -453,7 +451,7 @@ std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::Res
 		auto wrapper = std::make_unique<NormalNodeWrapper>();
 		wrapper->imageTexNode = static_cast<ccl::ImageTextureNode*>(AddNode(unirender::NODE_IMAGE_TEXTURE));
 		assert(wrapper->imageTexNode);
-		wrapper->imageTexNode->colorspace = ccl::u_colorspace_raw;
+		wrapper->imageTexNode->set_colorspace(ccl::u_colorspace_raw);
 
 		auto *sep = static_cast<ccl::SeparateRGBNode*>(AddNode(unirender::NODE_SEPARATE_RGB));
 		m_cclGraph.connect(FindOutput(*wrapper->imageTexNode,unirender::nodes::image_texture::OUT_COLOR),FindInput(*sep,unirender::nodes::separate_rgb::IN_COLOR));
@@ -465,7 +463,7 @@ std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::Res
 		
 		wrapper->normalMapNode = static_cast<ccl::NormalMapNode*>(AddNode(unirender::NODE_NORMAL_MAP));
 		assert(wrapper->normalMapNode);
-		wrapper->normalMapNode->space = ccl::NodeNormalMapSpace::NODE_NORMAL_MAP_TANGENT;
+		wrapper->normalMapNode->set_space(ccl::NodeNormalMapSpace::NODE_NORMAL_MAP_TANGENT);
 
 		auto *normIn = FindInput(*wrapper->normalMapNode,unirender::nodes::normal_map::IN_COLOR);
 		m_cclGraph.connect(FindOutput(*cmb,unirender::nodes::combine_rgb::OUT_IMAGE),normIn);
@@ -638,11 +636,11 @@ void unirender::CCLShader::ApplySocketValue(const NodeSocketDesc &sockDesc,ccl::
 		node.set(sockType,*static_cast<STFloat*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::Int:
-		static_assert(std::is_same_v<STInt,ccl::int32_t>);
+		static_assert(std::is_same_v<STInt,int32_t>);
 		node.set(sockType,*static_cast<STInt*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::Enum:
-		static_assert(std::is_same_v<STEnum,ccl::int32_t>);
+		static_assert(std::is_same_v<STEnum,int32_t>);
 		node.set(sockType,*static_cast<STEnum*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::UInt:
@@ -720,15 +718,15 @@ void unirender::CCLShader::ConvertGroupSocketsToNodes(const GroupNodeDesc &group
 			{
 				auto *nodeMath = static_cast<ccl::MathNode*>(AddNode(NODE_MATH));
 				assert(nodeMath);
-				nodeMath->type = ccl::NodeMathType::NODE_MATH_ADD;
-				nodeMath->value1 = 0.f;
-				nodeMath->value2 = 0.f;
+				nodeMath->set_math_type(ccl::NodeMathType::NODE_MATH_ADD);
+				nodeMath->set_value1(0.f);
+				nodeMath->set_value2(0.f);
 
 				if(socketDesc.dataValue.value)
 				{
 					auto v = socketDesc.dataValue.ToValue<float>();
 					if(v.has_value())
-						nodeMath->value1 = *v;
+						nodeMath->set_value1(*v);
 				}
 				socketTranslation.input = {nodeMath,nodes::math::IN_VALUE1};
 				socketTranslation.output = {nodeMath,nodes::math::OUT_VALUE};
@@ -737,15 +735,15 @@ void unirender::CCLShader::ConvertGroupSocketsToNodes(const GroupNodeDesc &group
 			{
 				auto *nodeVec = static_cast<ccl::VectorMathNode*>(AddNode(NODE_VECTOR_MATH));
 				assert(nodeVec);
-				nodeVec->type = ccl::NodeVectorMathType::NODE_VECTOR_MATH_ADD;
-				nodeVec->vector1 = {0.f,0.f,0.f};
-				nodeVec->vector2 = {0.f,0.f,0.f};
+				nodeVec->set_math_type(ccl::NodeVectorMathType::NODE_VECTOR_MATH_ADD);
+				nodeVec->set_vector1({0.f,0.f,0.f});
+				nodeVec->set_vector2({0.f,0.f,0.f});
 
 				if(socketDesc.dataValue.value)
 				{
 					auto v = socketDesc.dataValue.ToValue<Vector3>();
 					if(v.has_value())
-						nodeVec->vector1 = {v->x,v->y,v->z};
+						nodeVec->set_vector1({v->x,v->y,v->z});
 				}
 				socketTranslation.input = {nodeVec,nodes::vector_math::IN_VECTOR1};
 				socketTranslation.output = {nodeVec,nodes::vector_math::OUT_VECTOR};
@@ -754,7 +752,7 @@ void unirender::CCLShader::ConvertGroupSocketsToNodes(const GroupNodeDesc &group
 			{
 				auto *mix = static_cast<ccl::MixClosureNode*>(AddNode(NODE_MIX_CLOSURE));
 				assert(mix);
-				mix->fac = 0.f;
+				mix->set_fac(0.f);
 
 				socketTranslation.input = {mix,nodes::mix_closure::IN_CLOSURE1};
 				socketTranslation.output = {mix,nodes::mix_closure::OUT_CLOSURE};

@@ -19,7 +19,7 @@
 #include "util_raytracing/object.hpp"
 #include "util_raytracing/scene.hpp"
 #include "unirender/cycles/renderer.hpp"
-#include <render/mesh.h>
+#include <scene/mesh.h>
 
 #define FILTER_MASK_MARGIN 1
 #define FILTER_MASK_USED 2
@@ -44,7 +44,7 @@ typedef struct BakeDataZSpan {
 	float du_dx, du_dy;
 	float dv_dx, dv_dy;
 } BakeDataZSpan;
-
+#if 0
 void unirender::baking::populate_bake_data(ccl::BakeData *data,
 	const int object_id,
 	BakePixel *pixel_array,
@@ -63,7 +63,7 @@ void unirender::baking::populate_bake_data(ccl::BakeData *data,
 		++bp;
 	}
 }
-
+#endif
 static void bake_differentials(BakeDataZSpan *bd,
 	const float *uv1,
 	const float *uv2,
@@ -330,6 +330,7 @@ static void store_bake_pixel(void *handle, int x, int y, float u, float v)
 
 void unirender::baking::prepare_bake_data(const cycles::Renderer &renderer,unirender::Object &o,BakePixel *pixelArray,uint32_t numPixels,uint32_t imgWidth,uint32_t imgHeight,bool useLightmapUvs)
 {
+#if 0
 	/* initialize all pixel arrays so we know which ones are 'blank' */
 	for(auto i=decltype(numPixels){0u};i<numPixels;++i)
 	{
@@ -383,6 +384,7 @@ void unirender::baking::prepare_bake_data(const cycles::Renderer &renderer,unire
 		bake_differentials(&bd, vec[0], vec[1], vec[2]);
 		zspan_scanconvert(&bd.zspan[imageId], (void *)&bd, vec[0], vec[1], vec[2], store_bake_pixel);
 	}
+#endif
 }
 
 // Source: blender/blenlib/intern/math_base_inline.c

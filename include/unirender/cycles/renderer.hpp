@@ -11,7 +11,7 @@
 #include <util_raytracing/object.hpp>
 #include <util_raytracing/renderer.hpp>
 #include <util_raytracing/scene.hpp>
-#include <render/session.h>
+#include <session/session.h>
 #include <cinttypes>
 #include <atomic>
 
@@ -69,8 +69,8 @@ namespace unirender::cycles
 		std::shared_ptr<CCLShader> GetCachedShader(const GroupNodeDesc &desc) const;
 		void AddShader(CCLShader &shader,const GroupNodeDesc *optDesc=nullptr);
 
-		static void UpdateRenderTile(TileManager &tileManager,const ccl::RenderTile &tile,bool param);
-		static void WriteRenderTile(TileManager &tileManager,const ccl::RenderTile &tile);
+		//static void UpdateRenderTile(TileManager &tileManager,const ccl::RenderTile &tile,bool param);
+		//static void WriteRenderTile(TileManager &tileManager,const ccl::RenderTile &tile);
 
 		// For internal use only
 		void SetStereoscopicEye(StereoEye eye);
@@ -98,7 +98,7 @@ namespace unirender::cycles
 		virtual void CloseRenderScene() override;
 		virtual void FinalizeImage(uimg::ImageBuffer &imgBuf,StereoEye eyeStage) override;
 		void ReloadProgressiveRender(bool clearExposure=true,bool waitForPreviousCompletion=false);
-		Vector2i GetTileSize() const;
+		int GetTileSize() const;
 
 		void SetupRenderSettings(
 			ccl::Scene &scene,ccl::Session &session,ccl::BufferParams &bufferParams,unirender::Scene::RenderMode renderMode,

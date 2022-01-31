@@ -1238,48 +1238,70 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 				umath::ScaledTransform pose {};
 				pose.SetOrigin(ToPragmaPosition({0.f,0.f,-4.f}));
 
-	auto &cam = scene.GetCamera();
-	SyncCamera(cam);
-				//cclCam.set_matrix(ToCyclesTransform(pose,true));
-				// cclCam.set_camera_type(ccl::CameraType::CAMERA_PERSPECTIVE);
-				//cclCam.compute_auto_viewplane();
-				// cclCam.need_flags_update = true;
-				// cclCam.update(cclScene);
+				{
+					if(m_scene->GetSceneInfo().sky.empty() == false)
+						AddSkybox(m_scene->GetSceneInfo().sky);
+					m_renderingStarted = true;
+	
+					auto &mdlCache = m_renderData.modelCache;
+					mdlCache->GenerateData();
+					uint32_t numObjects = 0;
+					uint32_t numMeshes = 0;
+					for(auto &chunk : mdlCache->GetChunks())
+					{
+						numObjects += chunk.GetObjects().size();
+						numMeshes += chunk.GetMeshes().size();
+					}
+					m_cclScene->objects.reserve(m_cclScene->objects.size() +numObjects);
+					m_cclScene->geometry.reserve(m_cclScene->geometry.size() +numMeshes);
 
-				auto bg =  cclScene->background;
+					auto &cam = scene.GetCamera();
+					SyncCamera(cam);
 
-				 ccl::Shader *shader = cclScene->default_background;
-				 ccl::ShaderGraph *graph = new ccl::ShaderGraph();
-				 ccl::SkyTextureNode *skyN = nullptr;
-				 {
-					 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"sky_texture"});
-					auto snode = (ccl::SkyTextureNode *)node_type->create(node_type);
-					snode->set_owner(graph);
-					snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
-					snode->name = ccl::ustring{"tex"};
-					graph->add(snode);
-					skyN = snode;
-				 }
-				 ccl::BackgroundNode *bgN = nullptr;
-				 {
-					 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"background_shader"});
-					auto snode = (ccl::BackgroundNode *)node_type->create(node_type);
-					snode->set_owner(graph);
-					snode->set_strength(8.f);
-					snode->set_color({1.f,0.f,0.f});
-					snode->name = ccl::ustring{"bg"};
-					graph->add(snode);
-					bgN = snode;
-				 }
-				 {
-					//graph->connect( find_output_socket(*skyN,"color"),find_input_socket(*bgN,"color"));
-					// graph->connect( find_output_socket(*bgN,"background"),find_input_socket(*graph->output(),"surface"));
-				 }
-				shader->set_graph(graph);
-				shader->tag_update(cclScene);
+					// Note: Lights and objects have to be initialized before shaders, because they may
+					// create additional shaders.
+					auto &lights = scene.GetLights();
+					m_cclScene->lights.reserve(lights.size());
+					for(auto &light : lights)
+					{
+						light->Finalize(scene);
+						SyncLight(scene,*light);
+					}
+					for(auto &chunk : mdlCache->GetChunks())
+					{
+						for(auto &o : chunk.GetObjects())
+							o->Finalize(*m_scene);
+						for(auto &o : chunk.GetMeshes())
+							o->Finalize(*m_scene);
+					}
+					for(auto &chunk : mdlCache->GetChunks())
+					{
+						for(auto &o : chunk.GetMeshes())
+							SyncMesh(*o);
+					}
+					for(auto &chunk : mdlCache->GetChunks())
+					{
+						for(auto &o : chunk.GetObjects())
+							SyncObject(*o);
+					}
+					for(auto &shader : m_renderData.shaderCache->GetShaders())
+						shader->Finalize();
+					for(auto &cclShader : m_cclShaders)
+						cclShader->Finalize(*m_scene);
 
-				if(m_scene->GetSceneInfo().sky.empty() == false)
-					AddSkybox(m_scene->GetSceneInfo().sky);
+					constexpr auto validate = false;
+					if constexpr(validate)
+					{
+						for(auto &chunk : m_renderData.modelCache->GetChunks())
+						{
+							for(auto &o : chunk.GetObjects())
+							{
+								auto &mesh = o->GetMesh();
+								mesh.Validate();
+							}
+						}
+					}
+				}
 
 
 				for(auto &cclShader : m_cclShaders)

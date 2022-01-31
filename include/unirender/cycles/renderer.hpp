@@ -19,6 +19,8 @@ namespace unirender {class Scene; namespace cycles {class Renderer;};};
 namespace unirender::cycles
 {
 	void compute_tangents(ccl::Mesh *mesh,bool need_sign,bool active_render);
+	class DisplayDriver;
+	class OutputDriver;
 	class Renderer
 		: public unirender::Renderer
 	{
@@ -69,6 +71,8 @@ namespace unirender::cycles
 		std::shared_ptr<CCLShader> GetCachedShader(const GroupNodeDesc &desc) const;
 		void AddShader(CCLShader &shader,const GroupNodeDesc *optDesc=nullptr);
 
+		DisplayDriver *GetDisplayDriver() {return m_displayDriver;}
+		OutputDriver *GetOutputDriver() {return m_outputDriver;}
 		//static void UpdateRenderTile(TileManager &tileManager,const ccl::RenderTile &tile,bool param);
 		//static void WriteRenderTile(TileManager &tileManager,const ccl::RenderTile &tile);
 
@@ -113,9 +117,11 @@ namespace unirender::cycles
 		void SyncMesh(const unirender::Mesh &mesh);
 		void InitializeSession(unirender::Scene &scene,const ccl::DeviceInfo &devInfo);
 		std::optional<ccl::DeviceInfo> InitializeDevice(const unirender::Scene &scene);
-		bool Initialize(unirender::Scene &scene);
+		bool Initialize(unirender::Scene &scene,std::string &outErr);
 		unirender::Scene::DeviceType m_deviceType = unirender::Scene::DeviceType::CPU;
 		std::unique_ptr<ccl::Session> m_cclSession = nullptr;
+		DisplayDriver *m_displayDriver = nullptr;
+		OutputDriver *m_outputDriver = nullptr;
 		ccl::Scene *m_cclScene = nullptr;
 		std::vector<std::shared_ptr<CCLShader>> m_cclShaders = {};
 		std::unordered_map<const GroupNodeDesc*,size_t> m_shaderCache {};

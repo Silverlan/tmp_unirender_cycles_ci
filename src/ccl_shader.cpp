@@ -480,6 +480,7 @@ ccl::ShaderNode *unirender::CCLShader::AddNode(const std::string &typeName)
 		return nullptr;
 
 	auto name = GetCurrentInternalNodeName();
+	snode->set_owner(&m_cclGraph);
 	snode->name = name;
 	m_cclGraph.add(snode);
 	return snode;

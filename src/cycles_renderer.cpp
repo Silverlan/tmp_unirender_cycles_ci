@@ -13,6 +13,7 @@
 #include "util_raytracing/camera.hpp"
 #include "unirender/cycles/baking.hpp"
 #include "unirender/cycles/renderer.hpp"
+#include "unirender/cycles/display_driver.hpp"
 #include "util_raytracing/shader_nodes.hpp"
 #include "unirender/cycles/ccl_shader.hpp"
 #include "util_raytracing/model_cache.hpp"
@@ -36,9 +37,9 @@
 #include <scene/svm.h>
 #include <scene/bake.h>
 #include <scene/particles.h>
+#define ENABLE_CYCLES_LOGGING
 #ifdef ENABLE_CYCLES_LOGGING
 #define GLOG_NO_ABBREVIATED_SEVERITIES
-#include <util/util_logging.h>
 #include <glog/logging.h>
 #endif
 #include <util_image_buffer.hpp>
@@ -61,27 +62,25 @@ static void init_cycles()
 
 	// ccl::path_init(kernelPath,kernelPath);
 
-	putenv(("CYCLES_KERNEL_PATH=" +kernelPath).c_str());
-	putenv(("CYCLES_SHADER_PATH=" +kernelPath).c_str());
+	util::set_env_variable("CYCLES_KERNEL_PATH",kernelPath);
+	util::set_env_variable("CYCLES_SHADER_PATH",kernelPath);
 #ifdef ENABLE_CYCLES_LOGGING
+	// ccl::util_logging_init("util_raytracing");
+	// ccl::util_logging_verbosity_set(2);
+	// ccl::util_logging_start();
+	google::InitGoogleLogging("util_raytracing");
 	google::SetLogDestination(google::GLOG_INFO,(kernelPath +"/log/info.log").c_str());
 	google::SetLogDestination(google::GLOG_WARNING,(kernelPath +"/log/warning.log").c_str());
+	google::SetLogDestination(google::GLOG_ERROR,(kernelPath +"/log/error.log").c_str());
+	google::SetLogDestination(google::GLOG_FATAL,(kernelPath +"/log/fatal.log").c_str());
 	FLAGS_log_dir = kernelPath +"/log";
-
-	ccl::util_logging_init("util_raytracing");
-	ccl::util_logging_verbosity_set(2);
-	ccl::util_logging_start();
-	FLAGS_logtostderr = false;
-	FLAGS_alsologtostderr = true; // Doesn't seem to work properly?
-	FLAGS_stderrthreshold = google::GLOG_WARNING|google::GLOG_ERROR|google::GLOG_INFO|google::GLOG_FATAL;
-	FLAGS_v = 5; // Setting the log level any other way doesn't seem to work properly
-
-	// Test output
-	/*google::LogAtLevel(google::GLOG_INFO,"Info test");
-	google::LogAtLevel(google::GLOG_WARNING,"Warning test");
-	VLOG(1) << "Colorspace " << 5 << " is no-op";
-	google::FlushLogFiles(google::GLOG_INFO);
-	google::FlushLogFiles(google::GLOG_WARNING);*/
+	//FLAGS_logtostderr = true;
+	//FLAGS_alsologtostderr = true; // Doesn't seem to work properly?
+	//FLAGS_stderrthreshold = google::GLOG_WARNING|google::GLOG_ERROR|google::GLOG_INFO|google::GLOG_FATAL;
+	//FLAGS_v = 5; // Setting the log level any other way doesn't seem to work properly
+	// LOG(INFO) << "Info Test 1";
+	// google::LogAtLevel(google::GLOG_INFO,"Info test");
+	// google::LogAtLevel(google::GLOG_WARNING,"Warning test");
 #endif
 }
 
@@ -170,6 +169,12 @@ unirender::cycles::Renderer::Renderer(const Scene &scene)
 unirender::cycles::Renderer::~Renderer()
 {
 	FinalizeAndCloseCyclesScene();
+#ifdef ENABLE_CYCLES_LOGGING
+	google::FlushLogFiles(google::GLOG_INFO);
+	google::FlushLogFiles(google::GLOG_WARNING);
+	google::FlushLogFiles(google::GLOG_ERROR);
+	google::FlushLogFiles(google::GLOG_FATAL);
+#endif
 }
 
 ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const
@@ -556,7 +561,7 @@ void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam)
 	std::cout<<std::endl;
 	//
 
-	cclCam.tag_modified();
+	cclCam.need_flags_update = true;
 	cclCam.update(&**this);
 }
 
@@ -702,6 +707,9 @@ void unirender::cycles::Renderer::Wait()
 
 std::shared_ptr<uimg::ImageBuffer> unirender::cycles::Renderer::FinalizeCyclesScene()
 {
+	auto *driver = GetDisplayDriver();
+	assert(driver);
+	return driver->GetImageBuffer();
 #if 0
 	// Note: We want the HDR output values from cycles which haven't been tonemapped yet, but Cycles
 	// makes this impossible to do, so we'll have to use this work-around.
@@ -810,11 +818,373 @@ std::optional<uint32_t> unirender::cycles::Renderer::FindCCLObjectId(const ccl::
 	return (it != m_cclScene->objects.end()) ? (it -m_cclScene->objects.begin()) : std::optional<uint32_t>{};
 }
 
-bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene)
+struct Options {
+  ccl::Session *session;
+  ccl::Scene *scene;
+  ccl::string filepath;
+  int width, height;
+  ccl::SceneParams scene_params;
+  ccl::SessionParams session_params;
+  bool quiet;
+  bool show_help, interactive, pause;
+  ccl::string output_filepath;
+  ccl::string output_pass;
+};
+
+
+#include "app/cycles_xml.h"
+static void scene_init(Options &options)
 {
+  options.scene = options.session->scene;
+
+  /* Read XML */
+ ccl::xml_read_file(options.scene, options.filepath.c_str());
+
+  /* Camera width/height override? */
+  if (!(options.width == 0 || options.height == 0)) {
+    options.scene->camera->set_full_width(options.width);
+    options.scene->camera->set_full_height(options.height);
+  }
+  else {
+    options.width = options.scene->camera->get_full_width();
+    options.height = options.scene->camera->get_full_height();
+  }
+
+  /* Calculate Viewplane */
+  options.scene->camera->compute_auto_viewplane();
+}
+
+static ccl::BufferParams &session_buffer_params(Options &opts)
+{
+  static ccl::BufferParams buffer_params;
+  buffer_params.width = opts.width;
+  buffer_params.height = opts.height;
+  buffer_params.full_width = opts.width;
+  buffer_params.full_height = opts.height;
+
+  return buffer_params;
+}
+
+static void session_print(const ccl::string &str)
+{
+  /* print with carriage return to overwrite previous */
+ // printf("\r%s", str.c_str());
+
+  /* add spaces to overwrite longer previous print */
+  static int maxlen = 0;
+  int len = str.size();
+  maxlen = ccl::max(len, maxlen);
+
+  //for (int i = len; i < maxlen; i++)
+  //  printf(" ");
+
+  /* flush because we don't write an end of line */
+  //fflush(stdout);
+}
+
+static void session_print_status(Options &opts)
+{
+  ccl::string status, substatus;
+
+  /* get status */
+  double progress = opts.session->progress.get_progress();
+  opts.session->progress.get_status(status, substatus);
+
+  if (substatus != "")
+    status += ": " + substatus;
+
+  /* print status */
+  //status = ccl::string_printf("Progress %05.2f   %s", (double)progress * 100, status.c_str());
+  //session_print(status);
+}
+
+#include <app/oiio_output_driver.h>
+
+class COIIOOutputDriver : public ccl::OutputDriver {
+ public:
+  typedef ccl::function<void(const ccl::string &)> LogFunction;
+
+  COIIOOutputDriver(const ccl::string_view filepath, const ccl::string_view pass, LogFunction log);
+  virtual ~COIIOOutputDriver();
+
+  void write_render_tile(const Tile &tile) override;
+
+ protected:
+  ccl::string filepath_;
+  ccl::string pass_;
+  LogFunction log_;
+};
+
+COIIOOutputDriver::COIIOOutputDriver(const ccl::string_view filepath,
+                                   const ccl::string_view pass,
+                                   LogFunction log)
+    : filepath_(filepath), pass_(pass), log_(log)
+{
+}
+
+COIIOOutputDriver::~COIIOOutputDriver()
+{
+}
+
+void COIIOOutputDriver::write_render_tile(const Tile &tile)
+{
+  /* Only write the full buffer, no intermediate tiles. */
+  if (!(tile.size == tile.full_size)) {
+    return;
+  }
+
+  //log_(ccl::string_printf("Writing image %s", filepath_.c_str()));
+
+  ccl::unique_ptr<ccl::ImageOutput> image_output(ccl::ImageOutput::create(filepath_));
+  if (image_output == nullptr) {
+    //log_("Failed to create image file");
+    return;
+  }
+
+  const int width = tile.size.x;
+  const int height = tile.size.y;
+
+  ccl::ImageSpec spec(width, height, 4, ccl::TypeDesc::FLOAT);
+  if (!image_output->open(filepath_, spec)) {
+    //log_("Failed to create image file");
+    return;
+  }
+
+  ccl::vector<float> pixels(width * height * 4);
+  if (!tile.get_pass_pixels(pass_, 4, pixels.data())) {
+    //log_("Failed to read render pass pixels");
+    return;
+  }
+
+  /* Manipulate offset and stride to convert from bottom-up to top-down convention. */
+  image_output->write_image(ccl::TypeDesc::FLOAT,
+                            pixels.data() + (height - 1) * width * 4,
+                            ccl::AutoStride,
+                            -width * 4 * sizeof(float),
+                            ccl::AutoStride);
+  image_output->close();
+}
+
+static void session_init(Options &options)
+{
+  options.output_pass = "combined";
+  options.session = new ccl::Session(options.session_params, options.scene_params);
+
+  if (!options.output_filepath.empty()) {
+    options.session->set_output_driver(make_unique<COIIOOutputDriver>(
+        options.output_filepath, options.output_pass, session_print));
+  }
+
+  if (options.session_params.background && !options.quiet)
+	  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
+#ifdef WITH_CYCLES_STANDALONE_GUI
+  else
+    options.session->progress.set_update_callback(function_bind(&view_redraw));
+#endif
+
+  /* load scene */
+  scene_init(options);
+
+  /* add pass for output. */
+  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
+  pass->set_name(ccl::ustring(options.output_pass.c_str()));
+  pass->set_type(ccl::PASS_COMBINED);
+
+  options.session->reset(options.session_params, session_buffer_params(options));
+  options.session->start();
+}
+
+static void session_x(Options &options)
+{
+  options.output_pass = "combined";
+  if (!options.output_filepath.empty()) {
+    options.session->set_output_driver(make_unique<COIIOOutputDriver>(
+        options.output_filepath, options.output_pass, session_print));
+  }
+
+  if (options.session_params.background && !options.quiet)
+	  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
+#ifdef WITH_CYCLES_STANDALONE_GUI
+  else
+    options.session->progress.set_update_callback(function_bind(&view_redraw));
+#endif
+
+  /* add pass for output. */
+  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
+  pass->set_name(ccl::ustring(options.output_pass.c_str()));
+  pass->set_type(ccl::PASS_COMBINED);
+
+  options.session->reset(options.session_params, session_buffer_params(options));
+  options.session->start();
+}
+
+static void session_exit(Options &options)
+{
+  if (options.session) {
+    delete options.session;
+    options.session = NULL;
+  }
+
+  if (options.session_params.background && !options.quiet) {
+    session_print("Finished Rendering.");
+    //printf("\n");
+  }
+}
+
+static ccl::ShaderInput *find_input_socket(ccl::ShaderNode &node,const char *strInput)
+{
+	for(auto *input : node.inputs)
+	{
+		if(ccl::string_iequals(input->socket_type.name.string(), strInput))
+			return input;
+	}
+	return nullptr;
+}
+static ccl::ShaderOutput *find_output_socket(ccl::ShaderNode &node,const char *strOutput)
+{
+	for(auto *output : node.outputs)
+	{
+		if(ccl::string_iequals(output->socket_type.name.string(), strOutput))
+			return output;
+	}
+	return nullptr;
+}
+
+bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string &outErr)
+{
+#if 0
+	{
+		Options opts {};
+
+		opts.width = 1024;
+		opts.height = 512;
+		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
+		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
+		opts.session = NULL;
+		opts.quiet = false;
+		opts.session_params.use_auto_tile = false;
+		opts.session_params.tile_size = 16;
+		opts.session_params.samples = 20;
+
+		session_init(opts);
+		while(opts.session->progress.get_progress() < 1.f)
+			;
+		session_exit(opts);
+		std::cout<<"ERRX"<<std::endl;
+		return false;
+	}
+#endif
+
+#if 0
+	{
+		Options opts {};
+
+		opts.width = 1024;
+		opts.height = 512;
+		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
+		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
+		opts.session = NULL;
+		opts.quiet = false;
+		opts.session_params.use_auto_tile = false;
+		opts.session_params.tile_size = 16;
+		opts.session_params.samples = 20;
+
+		{
+			auto &options = opts;
+  options.output_pass = "combined";
+  options.session = new ccl::Session(options.session_params, options.scene_params);
+
+  if (!options.output_filepath.empty()) {
+    options.session->set_output_driver(make_unique<COIIOOutputDriver>(
+        options.output_filepath, options.output_pass, session_print));
+  }
+
+  if (options.session_params.background && !options.quiet)
+	  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
+#ifdef WITH_CYCLES_STANDALONE_GUI
+  else
+    options.session->progress.set_update_callback(function_bind(&view_redraw));
+#endif
+
+  /* load scene */
+  //scene_init(options);
+  {
+	  options.scene = options.session->scene;
+	  auto *cclScene = options.scene;
+	  auto *m_cclSession = options.session;
+			auto &cclCam = *cclScene->camera;
+
+			umath::ScaledTransform pose {};
+			pose.SetOrigin(ToPragmaPosition({0.f,0.f,-4.f}));
+			cclCam.set_matrix(ToCyclesTransform(pose,true));
+			 cclCam.set_camera_type(ccl::CameraType::CAMERA_PERSPECTIVE);
+			cclCam.compute_auto_viewplane();
+			 cclCam.need_flags_update = true;
+			 cclCam.update(cclScene);
+
+			auto bg =  cclScene->background;
+
+			 ccl::Shader *shader = cclScene->default_background;
+			 ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+			 ccl::SkyTextureNode *skyN = nullptr;
+			 {
+				 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"sky_texture"});
+				auto snode = (ccl::SkyTextureNode *)node_type->create(node_type);
+				snode->set_owner(graph);
+				snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+				snode->name = ccl::ustring{"tex"};
+				graph->add(snode);
+				skyN = snode;
+			 }
+			 ccl::BackgroundNode *bgN = nullptr;
+			 {
+				 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"background_shader"});
+				auto snode = (ccl::BackgroundNode *)node_type->create(node_type);
+				snode->set_owner(graph);
+				snode->set_strength(8.f);
+				snode->set_color({1.f,0.f,0.f});
+				snode->name = ccl::ustring{"bg"};
+				graph->add(snode);
+				bgN = snode;
+			 }
+			 {
+				graph->connect( find_output_socket(*skyN,"color"),find_input_socket(*bgN,"color"));
+				 graph->connect( find_output_socket(*bgN,"background"),find_input_socket(*graph->output(),"surface"));
+			 }
+			shader->set_graph(graph);
+			shader->tag_update(cclScene);
+
+			if (!options.output_filepath.empty()) {
+			m_cclSession->set_output_driver(make_unique<COIIOOutputDriver>(
+				options.output_filepath, options.output_pass, session_print));
+			}
+
+			if (options.session_params.background && !options.quiet)
+				m_cclSession->progress.set_update_callback([&options]() {session_print_status(options);});
+  }
+
+  /* add pass for output. */
+  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
+  pass->set_name(ccl::ustring(options.output_pass.c_str()));
+  pass->set_type(ccl::PASS_COMBINED);
+
+  options.session->reset(options.session_params, session_buffer_params(options));
+  options.session->start();
+
+		}
+		while(opts.session->progress.get_progress() < 1.f)
+			;
+		session_exit(opts);
+		std::cout<<"ERRX"<<std::endl;
+		return false;
+	}
+#endif
+
 	auto devInfo = InitializeDevice(scene);
 	if(devInfo.has_value() == false)
 		return false;
+
+
 	AddOutput(OUTPUT_COLOR);
 	if(m_scene->ShouldDenoise())
 	{
@@ -826,6 +1196,122 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene)
 	auto bufferParams = GetBufferParameters();
 
 	m_cclSession->scene = m_cclScene;
+
+	{
+		Options opts {};
+
+		opts.width = 1024;
+		opts.height = 512;
+		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
+		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
+		opts.session = NULL;
+		opts.quiet = false;
+		opts.session_params.use_auto_tile = false;
+		opts.session_params.tile_size = 16;
+		opts.session_params.samples = 20;
+
+		{
+			auto &options = opts;
+	  options.output_pass = "combined";
+	  options.session = m_cclSession.get();//new ccl::Session(options.session_params, options.scene_params);
+
+	  if (!options.output_filepath.empty()) {
+		options.session->set_output_driver(make_unique<COIIOOutputDriver>(
+			options.output_filepath, options.output_pass, session_print));
+	  }
+
+	  if (options.session_params.background && !options.quiet)
+		  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
+	#ifdef WITH_CYCLES_STANDALONE_GUI
+	  else
+		options.session->progress.set_update_callback(function_bind(&view_redraw));
+	#endif
+
+	  /* load scene */
+	  //scene_init(options);
+	  {
+		  options.scene = options.session->scene;
+		  auto *cclScene = options.scene;
+		  auto *m_cclSession = options.session;
+				//auto &cclCam = *cclScene->camera;
+
+				umath::ScaledTransform pose {};
+				pose.SetOrigin(ToPragmaPosition({0.f,0.f,-4.f}));
+
+	auto &cam = scene.GetCamera();
+	SyncCamera(cam);
+				//cclCam.set_matrix(ToCyclesTransform(pose,true));
+				// cclCam.set_camera_type(ccl::CameraType::CAMERA_PERSPECTIVE);
+				//cclCam.compute_auto_viewplane();
+				// cclCam.need_flags_update = true;
+				// cclCam.update(cclScene);
+
+				auto bg =  cclScene->background;
+
+				 ccl::Shader *shader = cclScene->default_background;
+				 ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+				 ccl::SkyTextureNode *skyN = nullptr;
+				 {
+					 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"sky_texture"});
+					auto snode = (ccl::SkyTextureNode *)node_type->create(node_type);
+					snode->set_owner(graph);
+					snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+					snode->name = ccl::ustring{"tex"};
+					graph->add(snode);
+					skyN = snode;
+				 }
+				 ccl::BackgroundNode *bgN = nullptr;
+				 {
+					 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"background_shader"});
+					auto snode = (ccl::BackgroundNode *)node_type->create(node_type);
+					snode->set_owner(graph);
+					snode->set_strength(8.f);
+					snode->set_color({1.f,0.f,0.f});
+					snode->name = ccl::ustring{"bg"};
+					graph->add(snode);
+					bgN = snode;
+				 }
+				 {
+					//graph->connect( find_output_socket(*skyN,"color"),find_input_socket(*bgN,"color"));
+					// graph->connect( find_output_socket(*bgN,"background"),find_input_socket(*graph->output(),"surface"));
+				 }
+				shader->set_graph(graph);
+				shader->tag_update(cclScene);
+
+				if(m_scene->GetSceneInfo().sky.empty() == false)
+					AddSkybox(m_scene->GetSceneInfo().sky);
+
+
+				for(auto &cclShader : m_cclShaders)
+					cclShader->Finalize(*m_scene);
+
+				if (!options.output_filepath.empty()) {
+				m_cclSession->set_output_driver(make_unique<COIIOOutputDriver>(
+					options.output_filepath, options.output_pass, session_print));
+				}
+
+				if (options.session_params.background && !options.quiet)
+					m_cclSession->progress.set_update_callback([&options]() {session_print_status(options);});
+	  }
+
+		  /* add pass for output. */
+		  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
+		  pass->set_name(ccl::ustring(options.output_pass.c_str()));
+		  pass->set_type(ccl::PASS_COMBINED);
+
+		  options.session->reset(options.session_params, session_buffer_params(options));
+		  options.session->start();
+
+		}
+		while(opts.session->progress.get_progress() < 1.f)
+			;
+		opts.session = nullptr;
+		m_cclSession  =nullptr;
+		session_exit(opts);
+		std::cout<<"ERRX"<<std::endl;
+		return false;
+	}
+
 	m_cclSession->reset(m_cclSession->params,bufferParams);
 
 	if(m_scene->GetSceneInfo().sky.empty() == false)
@@ -844,7 +1330,8 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene)
 	m_cclScene->objects.reserve(m_cclScene->objects.size() +numObjects);
 	m_cclScene->geometry.reserve(m_cclScene->geometry.size() +numMeshes);
 
-	SyncCamera(scene.GetCamera());
+	auto &cam = scene.GetCamera();
+	SyncCamera(cam);
 
 	// Note: Lights and objects have to be initialized before shaders, because they may
 	// create additional shaders.
@@ -876,12 +1363,6 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene)
 		shader->Finalize();
 	for(auto &cclShader : m_cclShaders)
 		cclShader->Finalize(*m_scene);
-
-		/*
-		void SyncCamera(const unirender::Camera &cam);
-		void SyncObject(const unirender::Object &obj);
-		void SyncMesh(const unirender::Mesh &mesh);
-		*/
 
 	constexpr auto validate = false;
 	if constexpr(validate)
@@ -928,6 +1409,15 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene)
 		m_tileManager.SetFlipImage(flipHorizontally,true);
 		m_tileManager.SetExposure(sceneInfo.exposure);
 	}
+
+	auto displayDriver = std::make_unique<DisplayDriver>(cam.GetWidth(),cam.GetHeight());
+	m_displayDriver = displayDriver.get();
+	auto outputDriver = std::make_unique<OutputDriver>(cam.GetWidth(),cam.GetHeight());
+	m_outputDriver = outputDriver.get();
+	m_cclSession->set_display_driver(std::move(displayDriver));
+	m_cclSession->set_output_driver(std::move(outputDriver));
+
+	//ccl::xml_read_file(m_cclScene,"E:/projects/cycles/examples/scene_monkey.xml");
 	return true;
 }
 
@@ -1264,7 +1754,12 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 	{
 		worker.AddThread([this,&worker]() {
 			PrepareCyclesSceneForRendering();
-			Initialize(*m_scene);
+			std::string err;
+			if(!Initialize(*m_scene,err))
+			{
+				worker.Cancel("Failed to initialize scene: " +err);
+				return RenderStageResult::Complete;
+			}
 
 			if(Scene::IsRenderSceneMode(m_renderMode))
 			{
@@ -1318,6 +1813,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			// Render image with lighting
 			auto progressMultiplier = (m_scene->GetDenoiseMode() == Scene::DenoiseMode::Detailed) ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
+				m_cclSession->draw(); // TODO
 				if(m_progressiveRefine == false)
 					m_cclSession->wait();
 				else if(m_progressiveRunning)
@@ -1988,6 +2484,10 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	session.params.use_profiling = false;
 	session.params.shadingsystem = ccl::ShadingSystem::SHADINGSYSTEM_SVM;
 
+	auto *pass = scene.create_node<ccl::Pass>();
+	pass->set_name(ccl::ustring{"combined"});
+	pass->set_type(ccl::PASS_COMBINED);
+
 #if 0
 	ccl::vector<ccl::BufferPass> passes;
 	auto displayPass = ccl::PassType::PASS_DIFFUSE_COLOR;
@@ -2168,7 +2668,7 @@ void unirender::cycles::Renderer::WriteRenderTile(unirender::TileManager &tileMa
 extern "C" {
 	bool __declspec(dllexport) create_renderer(const unirender::Scene &scene,unirender::Renderer::Flags flags,std::shared_ptr<unirender::Renderer> &outRenderer)
 	{
-		unirender::Scene::SetKernelPath(util::get_program_path() +"/modules/cycles");
+		unirender::Scene::SetKernelPath(util::get_program_path() +"/modules/unirender/cycles");
 		outRenderer = unirender::cycles::Renderer::Create(scene,flags);
 		return outRenderer != nullptr;
 	}

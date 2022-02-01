@@ -389,6 +389,33 @@ template<typename T,typename TCcl>
 	copy_vector_to_attribute(data,*attr,translate);
 }
 
+static ccl::ShaderInput *find_input_socket(ccl::ShaderNode &node,const char *strInput)
+{
+	for(auto *input : node.inputs)
+	{
+		if(ccl::string_iequals(input->socket_type.name.string(), strInput))
+			return input;
+	}
+	return nullptr;
+}
+static const ccl::SocketType *find_type_input(ccl::ShaderNode &node,const char *strInput)
+{
+	for(auto &input : node.type->inputs)
+	{
+		if(ccl::string_iequals(input.name.string(), strInput))
+			return &input;
+	}
+	return nullptr;
+}
+static ccl::ShaderOutput *find_output_socket(ccl::ShaderNode &node,const char *strOutput)
+{
+	for(auto *output : node.outputs)
+	{
+		if(ccl::string_iequals(output->socket_type.name.string(), strOutput))
+			return output;
+	}
+	return nullptr;
+}
 void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 {
 	auto *cclMesh = new ccl::Mesh{};
@@ -431,6 +458,28 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	cclMesh->get_used_shaders().resize(shaders.size());
 	for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
 	{
+		ccl::Shader *shader = new ccl::Shader{};
+			ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+			ccl::EmissionNode *skyN = nullptr;
+			{
+				const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"emission"});
+			auto snode = (ccl::EmissionNode *)node_type->create(node_type);
+			snode->set_owner(graph);
+			snode->set_color({1.f,1.f,1.f});
+			//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+			snode->name = ccl::ustring{"em"};
+			graph->add(snode);
+			skyN = snode;
+			}
+			{
+				graph->connect( find_output_socket(*skyN,"emission"),find_input_socket(*graph->output(),"surface"));
+			}
+		shader->set_graph(graph);
+		shader->tag_update(m_cclScene);
+		cclMesh->get_used_shaders()[i] = shader;
+	}
+	/*for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
+	{
 		auto desc = shaders.at(i)->GetActivePassNode();
 		if(desc == nullptr)
 			desc = GroupNodeDesc::Create(m_scene->GetShaderNodeManager()); // Just create a dummy node
@@ -439,7 +488,7 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 			throw std::logic_error{"Mesh shader must never be NULL!"};
 		if(cclShader)
 			cclMesh->get_used_shaders()[i] = **cclShader;
-	}
+	}*/
 
 	// TODO: We should be using the tangent values from m_tangents / m_tangentSigns
 	// but their coordinate system needs to be converted for Cycles.
@@ -1031,23 +1080,39 @@ static void session_exit(Options &options)
   }
 }
 
-static ccl::ShaderInput *find_input_socket(ccl::ShaderNode &node,const char *strInput)
+void unirender::cycles::Renderer::AddDebugSky()
 {
-	for(auto *input : node.inputs)
+	auto bg =  m_cclScene->background;
+
+	ccl::Shader *shader = m_cclScene->default_background;
+	ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+	ccl::SkyTextureNode *skyN = nullptr;
 	{
-		if(ccl::string_iequals(input->socket_type.name.string(), strInput))
-			return input;
+		const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"sky_texture"});
+	auto snode = (ccl::SkyTextureNode *)node_type->create(node_type);
+	snode->set_owner(graph);
+	snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+	snode->name = ccl::ustring{"tex"};
+	graph->add(snode);
+	skyN = snode;
 	}
-	return nullptr;
-}
-static ccl::ShaderOutput *find_output_socket(ccl::ShaderNode &node,const char *strOutput)
-{
-	for(auto *output : node.outputs)
+	ccl::BackgroundNode *bgN = nullptr;
 	{
-		if(ccl::string_iequals(output->socket_type.name.string(), strOutput))
-			return output;
+		const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"background_shader"});
+	auto snode = (ccl::BackgroundNode *)node_type->create(node_type);
+	snode->set_owner(graph);
+	snode->set_strength(8.f);
+	snode->set_color({1.f,0.f,0.f});
+	snode->name = ccl::ustring{"bg"};
+	graph->add(snode);
+	bgN = snode;
 	}
-	return nullptr;
+	{
+	graph->connect( find_output_socket(*skyN,"color"),find_input_socket(*bgN,"color"));
+		graph->connect( find_output_socket(*bgN,"background"),find_input_socket(*graph->output(),"surface"));
+	}
+	shader->set_graph(graph);
+	shader->tag_update(m_cclScene);
 }
 
 bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string &outErr)
@@ -1239,8 +1304,9 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 				pose.SetOrigin(ToPragmaPosition({0.f,0.f,-4.f}));
 
 				{
-					if(m_scene->GetSceneInfo().sky.empty() == false)
-						AddSkybox(m_scene->GetSceneInfo().sky);
+					//if(m_scene->GetSceneInfo().sky.empty() == false)
+					//	AddSkybox(m_scene->GetSceneInfo().sky);
+					AddDebugSky();
 					m_renderingStarted = true;
 	
 					auto &mdlCache = m_renderData.modelCache;
@@ -1306,6 +1372,121 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 
 				for(auto &cclShader : m_cclShaders)
 					cclShader->Finalize(*m_scene);
+
+				ccl::Mesh *cclMesh;
+				ccl::Shader *shader;
+				{
+
+					cclMesh = new ccl::Mesh{};
+					m_cclScene->geometry.push_back(cclMesh);
+
+					/* Create object. */
+					ccl::Object *object = new ccl::Object();
+					object->set_geometry(cclMesh);
+					ccl::Transform t = ccl::transform_identity();
+					object->set_tfm(t);
+					m_cclScene->objects.push_back(object);
+
+					cclMesh->name = "floor";
+					auto *mesh = cclMesh;
+					ccl::array<ccl::float3> P_array {};
+					P_array.push_back_slow(ccl::float3{-3.f,3.f,0.f});
+					P_array.push_back_slow(ccl::float3{3.f,3.f,0.f});
+					P_array.push_back_slow(ccl::float3{3.f,-3.f,0.f});
+					P_array.push_back_slow(ccl::float3{-3.f,-3.f,0.f});
+					mesh->set_verts(P_array);
+
+					size_t num_triangles = 0;
+					ccl::vector<int> nverts {};
+					nverts.push_back(4);
+					for (size_t i = 0; i < nverts.size(); i++)
+					  num_triangles += nverts[i] - 2;
+					mesh->reserve_mesh(mesh->get_verts().size(), num_triangles);
+
+					/* create triangles */
+					int index_offset = 0;
+
+					ccl::vector<int> verts;
+					verts.push_back(0);
+					verts.push_back(1);
+					verts.push_back(2);
+					verts.push_back(3);
+					  int ishader = 0;
+					  bool smooth = true;
+					for (size_t i = 0; i < nverts.size(); i++) {
+					  for (int j = 0; j < nverts[i] - 2; j++) {
+						int v0 = verts[index_offset];
+						int v1 = verts[index_offset + j + 1];
+						int v2 = verts[index_offset + j + 2];
+
+						assert(v0 < (int)P.size());
+						assert(v1 < (int)P.size());
+						assert(v2 < (int)P.size());
+
+						mesh->add_triangle(v0, v1, v2, ishader, smooth);
+					  }
+
+					  index_offset += nverts[i];
+					}
+
+				  /* we don't yet support arbitrary attributes, for now add vertex
+				   * coordinates as generated coordinates if requested */
+				  if (mesh->need_attribute(cclScene, ccl::ATTR_STD_GENERATED)) {
+					ccl::Attribute *attr = mesh->attributes.add(ccl::ATTR_STD_GENERATED);
+					memcpy(
+						attr->data_float3(), mesh->get_verts().data(), sizeof(ccl::float3) * mesh->get_verts().size());
+				  }
+
+					shader = new ccl::Shader{};
+					shader->name = "shader_test";
+						ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+						ccl::GlossyBsdfNode *floorClosure = nullptr;
+						ccl::CheckerTextureNode *checker = nullptr;
+						{
+							const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"glossy_bsdf"});
+							auto snode = (ccl::GlossyBsdfNode *)node_type->create(node_type);
+							snode->set_owner(graph);
+							snode->name = ccl::ustring{"floor_closure2"};
+							snode->set(*find_type_input(*snode,"roughness"),0.2f);
+							snode->set(*find_type_input(*snode,"distribution"),"beckmann");
+							//snode->set_roughness(0.2f);
+							//snode->set_distribution(ccl::ClosureType::CLOSURE_BSDF_MICROFACET_BECKMANN_ID);
+							//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+							graph->add(snode);
+							floorClosure = snode;
+
+							
+							{
+								const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"checker_texture"});
+								auto snode = (ccl::CheckerTextureNode *)node_type->create(node_type);
+								snode->set_owner(graph);
+								snode->name = ccl::ustring{"checker2"};
+								snode->set(*find_type_input(*snode,"color1"),ccl::float3{0.8f,0.8f,0.8f});
+								snode->set(*find_type_input(*snode,"color2"),ccl::float3{1.f,0.1f,0.1f});
+								//snode->set_color1({0.8f,0.8f,0.8f});
+								//snode->set_color2({1.f,0.1f,0.1f});
+								//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+								graph->add(snode);
+								checker = snode;
+							}
+						}
+						{
+							graph->connect( find_output_socket(*checker,"color"),find_input_socket(*floorClosure,"color"));
+							graph->connect( find_output_socket(*floorClosure,"bsdf"),find_input_socket(*graph->output(),"surface"));
+						}
+					shader->set_graph(graph);
+					shader->tag_update(cclScene);
+					cclScene->shaders.push_back(shader);
+				}
+
+				ccl::xml_read_file(options.scene, options.filepath.c_str());
+				
+				static auto useXmlShader = false;
+				auto *targetshader = useXmlShader ? cclScene->shaders.back() : shader;
+
+				ccl::array<ccl::Node *> used_shaders = cclMesh->get_used_shaders();
+				used_shaders.push_back_slow(targetshader);
+				cclMesh->set_used_shaders(used_shaders);
 
 				if (!options.output_filepath.empty()) {
 				m_cclSession->set_output_driver(make_unique<COIIOOutputDriver>(

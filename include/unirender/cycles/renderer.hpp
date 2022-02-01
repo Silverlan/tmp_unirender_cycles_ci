@@ -109,6 +109,8 @@ namespace unirender::cycles
 			uint32_t maxTransparencyBounces
 		) const;
 
+		void AddDebugSky();
+
 		ccl::SessionParams GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const;
 		ccl::BufferParams GetBufferParameters() const;
 		void SyncLight(unirender::Scene &scene,const unirender::Light &light);

@@ -20,7 +20,7 @@
 #include "unirender/cycles/renderer.hpp"
 #include <scene/mesh.h>
 #include <mikktspace.h>
-#if 0
+
 struct MikkUserData {
   MikkUserData(
                const char *layer_name,
@@ -29,7 +29,7 @@ struct MikkUserData {
                float *tangent_sign)
       : mesh(mesh), texface(NULL), orco(NULL), tangent(tangent), tangent_sign(tangent_sign)
   {
-    const ccl::AttributeSet &attributes = (mesh->subd_faces.size()) ? mesh->subd_attributes :
+    const ccl::AttributeSet &attributes = (mesh->get_num_subd_faces()) ? mesh->subd_attributes :
                                                                  mesh->attributes;
 
     ccl::Attribute *attr_vN = attributes.find(ccl::ATTR_STD_VERTEX_NORMAL);
@@ -66,8 +66,8 @@ struct MikkUserData {
 static int mikk_get_num_faces(const SMikkTSpaceContext *context)
 {
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
-  if (userdata->mesh->subd_faces.size()) {
-    return userdata->mesh->subd_faces.size();
+  if (userdata->mesh->get_num_subd_faces()) {
+    return userdata->mesh->get_num_subd_faces();
   }
   else {
     return userdata->mesh->num_triangles();
@@ -77,9 +77,9 @@ static int mikk_get_num_faces(const SMikkTSpaceContext *context)
 static int mikk_get_num_verts_of_face(const SMikkTSpaceContext *context, const int face_num)
 {
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
-  if (userdata->mesh->subd_faces.size()) {
+  if (userdata->mesh->get_num_subd_faces()) {
     const ccl::Mesh *mesh = userdata->mesh;
-    return mesh->subd_faces[face_num].num_corners;
+    return mesh->get_subd_face(face_num).num_corners;
   }
   else {
     return 3;
@@ -88,19 +88,19 @@ static int mikk_get_num_verts_of_face(const SMikkTSpaceContext *context, const i
 
 static int mikk_vertex_index(const ccl::Mesh *mesh, const int face_num, const int vert_num)
 {
-  if (mesh->subd_faces.size()) {
-    const ccl::Mesh::SubdFace &face = mesh->subd_faces[face_num];
-    return mesh->subd_face_corners[face.start_corner + vert_num];
+  if (mesh->get_num_subd_faces()) {
+    const ccl::Mesh::SubdFace &face = mesh->get_subd_face(face_num);
+    return mesh->get_subd_face_corners()[face.start_corner + vert_num];
   }
   else {
-    return mesh->triangles[face_num * 3 + vert_num];
+    return mesh->get_triangles()[face_num * 3 + vert_num];
   }
 }
 
 static int mikk_corner_index(const ccl::Mesh *mesh, const int face_num, const int vert_num)
 {
-  if (mesh->subd_faces.size()) {
-    const ccl::Mesh::SubdFace &face = mesh->subd_faces[face_num];
+  if (mesh->get_num_subd_faces()) {
+    const ccl::Mesh::SubdFace &face = mesh->get_subd_face(face_num);
     return face.start_corner + vert_num;
   }
   else {
@@ -116,7 +116,7 @@ static void mikk_get_position(const SMikkTSpaceContext *context,
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
   const ccl::Mesh *mesh = userdata->mesh;
   const int vertex_index = mikk_vertex_index(mesh, face_num, vert_num);
-  const ccl::float3 vP = mesh->verts[vertex_index];
+  const ccl::float3 vP = mesh->get_verts()[vertex_index];
   P[0] = vP.x;
   P[1] = vP.y;
   P[2] = vP.z;
@@ -159,8 +159,8 @@ static void mikk_get_normal(const SMikkTSpaceContext *context,
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
   const ccl::Mesh *mesh = userdata->mesh;
   ccl::float3 vN;
-  if (mesh->subd_faces.size()) {
-    const ccl::Mesh::SubdFace &face = mesh->subd_faces[face_num];
+  if (mesh->get_num_subd_faces()) {
+    const ccl::Mesh::SubdFace &face = mesh->get_subd_face(face_num);
     if (face.smooth) {
       const int vertex_index = mikk_vertex_index(mesh, face_num, vert_num);
       vN = userdata->vertex_normal[vertex_index];
@@ -170,13 +170,13 @@ static void mikk_get_normal(const SMikkTSpaceContext *context,
     }
   }
   else {
-    if (mesh->smooth[face_num]) {
+    if (mesh->get_smooth()[face_num]) {
       const int vertex_index = mikk_vertex_index(mesh, face_num, vert_num);
       vN = userdata->vertex_normal[vertex_index];
     }
     else {
       const ccl::Mesh::Triangle tri = mesh->get_triangle(face_num);
-      vN = tri.compute_normal(&mesh->verts[0]);
+      vN = tri.compute_normal(&mesh->get_verts()[0]);
     }
   }
   N[0] = vN.x;
@@ -198,14 +198,13 @@ static void mikk_set_tangent_space(const SMikkTSpaceContext *context,
     userdata->tangent_sign[corner_index] = sign;
   }
 }
-#endif
+
 void unirender::cycles::compute_tangents(
     ccl::Mesh *mesh, bool need_sign, bool active_render)
 {
-#if 0
     const char *layer_name = nullptr;
   /* Create tangent attributes. */
-  ccl::AttributeSet &attributes = (mesh->subd_faces.size()) ? mesh->subd_attributes : mesh->attributes;
+  ccl::AttributeSet &attributes = (mesh->get_num_subd_faces()) ? mesh->subd_attributes : mesh->attributes;
   ccl::Attribute *attr;
   ccl::ustring name;
   if (layer_name != NULL) {
@@ -261,5 +260,4 @@ void unirender::cycles::compute_tangents(
   context.m_pInterface = &sm_interface;
   /* Compute tangents. */
   genTangSpaceDefault(&context);
-#endif
 }

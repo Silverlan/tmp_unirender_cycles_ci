@@ -25,7 +25,8 @@ namespace unirender
 	namespace cycles {
 		class Renderer;
 		ccl::NodeMathType to_ccl_type(unirender::nodes::math::MathType type);
-		ccl::NodeVectorMathType to_ccl_math_type(unirender::nodes::vector_math::MathType type);
+		ccl::NodeVectorMathType to_ccl_type(unirender::nodes::vector_math::MathType type);
+		ccl::NodeVectorTransformType to_ccl_type(unirender::nodes::vector_transform::Type type);
 		ccl::ustring to_ccl_type(unirender::ColorSpace space);
 		ccl::NodeEnvironmentProjection to_ccl_type(unirender::EnvironmentProjection projection);
 		ccl::ClosureType to_ccl_type(unirender::ClosureType type);
@@ -37,6 +38,11 @@ namespace unirender
 		ccl::NodeNormalMapSpace to_ccl_type(unirender::nodes::normal_map::Space space);
 		ccl::NodeMix to_ccl_type(unirender::nodes::mix::Mix mix);
 		ccl::NodeVectorTransformConvertSpace to_ccl_type(unirender::nodes::vector_transform::ConvertSpace convertSpace);
+		template<typename T>
+			unirender::STEnum to_ccl_enum(unirender::STEnum uniEnum)
+		{
+			return static_cast<STEnum>(to_ccl_type(static_cast<T>(uniEnum)));
+		}
 	};
 	struct GroupSocketTranslation
 	{
@@ -44,6 +50,7 @@ namespace unirender
 		std::pair<ccl::ShaderNode*,std::string> output;
 	};
 	using GroupSocketTranslationTable = std::unordered_map<Socket,GroupSocketTranslation,SocketHasher>;
+	struct CCLNodeFactory;
 	class CCLShader
 		: public std::enable_shared_from_this<CCLShader>,
 		public BaseObject
@@ -60,6 +67,7 @@ namespace unirender
 		static std::shared_ptr<CCLShader> Create(cycles::Renderer &renderer,ccl::Shader &cclShader,const GroupNodeDesc &desc,bool useCache=false);
 		static ccl::ShaderInput *FindInput(ccl::ShaderNode &node,const std::string &inputName);
 		static ccl::ShaderOutput *FindOutput(ccl::ShaderNode &node,const std::string &outputName);
+		static const ccl::SocketType *FindProperty(ccl::ShaderNode &node,const std::string &inputName);
 
 		~CCLShader();
 		void InitializeNodeGraph(const GroupNodeDesc &desc);
@@ -70,10 +78,11 @@ namespace unirender
 		CCLShader(cycles::Renderer &renderer,ccl::Shader &cclShader,ccl::ShaderGraph &cclShaderGraph);
 		virtual void DoFinalize(Scene &scene) override;
 		void InitializeNode(const NodeDesc &desc,std::unordered_map<const NodeDesc*,ccl::ShaderNode*> &nodeToCclNode,const GroupSocketTranslationTable &groupIoSockets);
+		static std::string TranslateInputName(const ccl::ShaderNode &node,const std::string &inputName);
 		void ConvertGroupSocketsToNodes(const GroupNodeDesc &groupDesc,GroupSocketTranslationTable &outGroupIoSockets);
-		const ccl::SocketType *FindProperty(ccl::ShaderNode &node,const std::string &inputName) const;
-		void ApplySocketValue(const NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType);
+		static void ApplySocketValue(const ccl::ShaderNode &shaderNode,const std::string &socketName,const NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType);
 		std::string GetCurrentInternalNodeName() const;
+		friend CCLNodeFactory;
 	private:
 		struct BaseNodeWrapper
 		{

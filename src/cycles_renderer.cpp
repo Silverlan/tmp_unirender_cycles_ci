@@ -455,45 +455,46 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	}
 
 	auto &shaders = mesh.GetSubMeshShaders();
-	cclMesh->get_used_shaders().resize(shaders.size());
-	for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
+	auto usedShaders = cclMesh->get_used_shaders();
+	usedShaders.resize(shaders.size());
+
+	auto apiData = GetApiData();
+	auto useDebugMeshShader = false;
+	apiData.GetFromPath("cycles/debug/use_debug_mesh_shader")(useDebugMeshShader);
+	if(useDebugMeshShader)
 	{
-		ccl::Shader *shader = new ccl::Shader{};
-			ccl::ShaderGraph *graph = new ccl::ShaderGraph();
-			ccl::EmissionNode *skyN = nullptr;
-			{
-				const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"emission"});
-			auto snode = (ccl::EmissionNode *)node_type->create(node_type);
-			snode->set_owner(graph);
-			snode->set_color({1.f,1.f,1.f});
-			//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
-			snode->name = ccl::ustring{"em"};
-			graph->add(snode);
-			skyN = snode;
-			}
-			{
-				graph->connect( find_output_socket(*skyN,"emission"),find_input_socket(*graph->output(),"surface"));
-			}
-		shader->set_graph(graph);
-		shader->tag_update(m_cclScene);
-		cclMesh->get_used_shaders()[i] = shader;
+		for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
+		{
+			auto *shader = AddDebugShader();
+			usedShaders[i] = shader;
+		}
 	}
-	/*for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
+	else
 	{
-		auto desc = shaders.at(i)->GetActivePassNode();
-		if(desc == nullptr)
-			desc = GroupNodeDesc::Create(m_scene->GetShaderNodeManager()); // Just create a dummy node
-		auto cclShader = CCLShader::Create(*this,*desc);
-		if(cclShader == nullptr)
-			throw std::logic_error{"Mesh shader must never be NULL!"};
-		if(cclShader)
-			cclMesh->get_used_shaders()[i] = **cclShader;
-	}*/
+		for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
+		{
+			auto desc = shaders.at(i)->GetActivePassNode();
+			if(desc == nullptr)
+				desc = GroupNodeDesc::Create(m_scene->GetShaderNodeManager()); // Just create a dummy node
+			auto cclShader = CCLShader::Create(*this,*desc);
+			if(cclShader == nullptr)
+				throw std::logic_error{"Mesh shader must never be NULL!"};
+			if(cclShader)
+				usedShaders[i] = **cclShader;
+		}
+	}
+	cclMesh->set_used_shaders(usedShaders);
 
 	// TODO: We should be using the tangent values from m_tangents / m_tangentSigns
 	// but their coordinate system needs to be converted for Cycles.
 	// For now we'll just re-compute the tangents here.
 	compute_tangents(cclMesh,true,true);
+
+	if(cclMesh->need_attribute(m_cclScene,ccl::ATTR_STD_GENERATED))
+	{
+		auto *attr = cclMesh->attributes.add(ccl::ATTR_STD_GENERATED);
+		memcpy(attr->data_float3(), cclMesh->get_verts().data(), sizeof(ccl::float3) *cclMesh->get_verts().size());
+	}
 }
 
 void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam)
@@ -1082,37 +1083,190 @@ static void session_exit(Options &options)
 
 void unirender::cycles::Renderer::AddDebugSky()
 {
-	auto bg =  m_cclScene->background;
+	auto *shader = m_cclScene->default_background;
+	auto *graph = new ccl::ShaderGraph();
 
-	ccl::Shader *shader = m_cclScene->default_background;
-	ccl::ShaderGraph *graph = new ccl::ShaderGraph();
-	ccl::SkyTextureNode *skyN = nullptr;
-	{
-		const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"sky_texture"});
-	auto snode = (ccl::SkyTextureNode *)node_type->create(node_type);
-	snode->set_owner(graph);
-	snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
-	snode->name = ccl::ustring{"tex"};
-	graph->add(snode);
-	skyN = snode;
-	}
-	ccl::BackgroundNode *bgN = nullptr;
-	{
-		const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"background_shader"});
-	auto snode = (ccl::BackgroundNode *)node_type->create(node_type);
-	snode->set_owner(graph);
-	snode->set_strength(8.f);
-	snode->set_color({1.f,0.f,0.f});
-	snode->name = ccl::ustring{"bg"};
-	graph->add(snode);
-	bgN = snode;
-	}
-	{
-	graph->connect( find_output_socket(*skyN,"color"),find_input_socket(*bgN,"color"));
-		graph->connect( find_output_socket(*bgN,"background"),find_input_socket(*graph->output(),"surface"));
-	}
+	const ccl::NodeType *skyTexNodeType = ccl::NodeType::find(ccl::ustring{"sky_texture"});
+	auto skyTex = (ccl::SkyTextureNode*)skyTexNodeType->create(skyTexNodeType);
+	skyTex->set_owner(graph);
+	skyTex->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+	skyTex->name = ccl::ustring{"tex"};
+	graph->add(skyTex);
+
+	const ccl::NodeType *bgShaderNodeType = ccl::NodeType::find(ccl::ustring{"background_shader"});
+	auto bgShader = (ccl::BackgroundNode *)bgShaderNodeType->create(bgShaderNodeType);
+	bgShader->set_owner(graph);
+	bgShader->set_strength(8.f);
+	bgShader->set_color({1.f,0.f,0.f});
+	bgShader->name = ccl::ustring{"bg"};
+	graph->add(bgShader);
+
+	graph->connect(find_output_socket(*skyTex,"color"),find_input_socket(*bgShader,"color"));
+	graph->connect(find_output_socket(*bgShader,"background"),find_input_socket(*graph->output(),"surface"));
+
 	shader->set_graph(graph);
 	shader->tag_update(m_cclScene);
+}
+
+ccl::Mesh *unirender::cycles::Renderer::AddDebugMesh()
+{
+	auto *cclMesh = new ccl::Mesh{};
+	m_cclScene->geometry.push_back(cclMesh);
+
+	cclMesh->name = "floor";
+	auto *mesh = cclMesh;
+	ccl::array<ccl::float3> P_array {};
+	P_array.push_back_slow(ccl::float3{-3.f,3.f,0.f});
+	P_array.push_back_slow(ccl::float3{3.f,3.f,0.f});
+	P_array.push_back_slow(ccl::float3{3.f,-3.f,0.f});
+	P_array.push_back_slow(ccl::float3{-3.f,-3.f,0.f});
+	mesh->set_verts(P_array);
+
+	size_t num_triangles = 0;
+	ccl::vector<int> nverts {};
+	nverts.push_back(4);
+	for (size_t i = 0; i < nverts.size(); i++)
+	num_triangles += nverts[i] - 2;
+	mesh->reserve_mesh(mesh->get_verts().size(), num_triangles);
+
+	/* create triangles */
+	int index_offset = 0;
+
+	ccl::vector<int> verts;
+	verts.push_back(0);
+	verts.push_back(1);
+	verts.push_back(2);
+	verts.push_back(3);
+	int ishader = 0;
+	bool smooth = true;
+	for (size_t i = 0; i < nverts.size(); i++) {
+		for (int j = 0; j < nverts[i] - 2; j++) {
+			int v0 = verts[index_offset];
+			int v1 = verts[index_offset + j + 1];
+			int v2 = verts[index_offset + j + 2];
+
+			assert(v0 < (int)P.size());
+			assert(v1 < (int)P.size());
+			assert(v2 < (int)P.size());
+
+			mesh->add_triangle(v0, v1, v2, ishader, smooth);
+		}
+
+		index_offset += nverts[i];
+	}
+
+	if (mesh->need_attribute(m_cclScene, ccl::ATTR_STD_GENERATED)) {
+		ccl::Attribute *attr = mesh->attributes.add(ccl::ATTR_STD_GENERATED);
+		memcpy(
+			attr->data_float3(), mesh->get_verts().data(), sizeof(ccl::float3) * mesh->get_verts().size()
+		);
+	}
+	return cclMesh;
+}
+ccl::Object *unirender::cycles::Renderer::AddDebugObject()
+{
+	auto *mesh = AddDebugMesh();
+	ccl::Object *object = new ccl::Object();
+	object->set_geometry(mesh);
+	ccl::Transform t = ccl::transform_identity();
+	object->set_tfm(t);
+	m_cclScene->objects.push_back(object);
+	return object;
+}
+ccl::Shader *unirender::cycles::Renderer::AddDebugShader()
+{
+	auto *shader = new ccl::Shader{};
+	shader->name = "shader_test";
+	ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+	
+	const ccl::NodeType *nodeTypeGlossy = ccl::NodeType::find(ccl::ustring{"glossy_bsdf"});
+	auto glossyNode = (ccl::GlossyBsdfNode *)nodeTypeGlossy->create(nodeTypeGlossy);
+	glossyNode->set_owner(graph);
+	glossyNode->name = ccl::ustring{"floor_closure2"};
+	glossyNode->set(*find_type_input(*glossyNode,"roughness"),0.2f);
+	glossyNode->set(*find_type_input(*glossyNode,"distribution"),"beckmann");
+	//snode->set_roughness(0.2f);
+	//snode->set_distribution(ccl::ClosureType::CLOSURE_BSDF_MICROFACET_BECKMANN_ID);
+	//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+	graph->add(glossyNode);
+
+	const ccl::NodeType *nodeTypeCheckerTex = ccl::NodeType::find(ccl::ustring{"checker_texture"});
+	auto checkerNode = (ccl::CheckerTextureNode *)nodeTypeCheckerTex->create(nodeTypeCheckerTex);
+	checkerNode->set_owner(graph);
+	checkerNode->name = ccl::ustring{"checker2"};
+	checkerNode->set(*find_type_input(*checkerNode,"color1"),ccl::float3{0.8f,0.8f,0.8f});
+	checkerNode->set(*find_type_input(*checkerNode,"color2"),ccl::float3{1.f,0.1f,0.1f});
+	//snode->set_color1({0.8f,0.8f,0.8f});
+	//snode->set_color2({1.f,0.1f,0.1f});
+	//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
+	graph->add(checkerNode);
+		
+	graph->connect( find_output_socket(*checkerNode,"color"),find_input_socket(*glossyNode,"color"));
+	graph->connect( find_output_socket(*glossyNode,"bsdf"),find_input_socket(*graph->output(),"surface"));
+	
+	shader->set_graph(graph);
+	shader->tag_update(m_cclScene);
+	m_cclScene->shaders.push_back(shader);
+	return shader;
+}
+
+void unirender::cycles::Renderer::InitializeDebugScene(const std::string &fileName,const std::vector<std::string> &xmlFileNames)
+{
+	Options opts {};
+
+	opts.width = 1024;
+	opts.height = 512;
+	opts.output_filepath = fileName;
+	opts.session = NULL;
+	opts.quiet = false;
+	opts.session_params.use_auto_tile = false;
+	opts.session_params.tile_size = 16;
+	opts.session_params.samples = 20;
+
+	opts.output_pass = "combined";
+	opts.session = m_cclSession.get();
+	opts.scene = opts.session->scene;
+
+	auto &cam = GetScene().GetCamera();
+	SyncCamera(cam);
+
+	PopulateDebugScene();
+	for(auto &filepath : xmlFileNames)
+		ccl::xml_read_file(opts.scene, filepath.c_str());
+	
+	if (!opts.output_filepath.empty()) {
+		opts.session->set_output_driver(make_unique<COIIOOutputDriver>(
+		opts.output_filepath, opts.output_pass, session_print));
+	}
+
+	if (opts.session_params.background && !opts.quiet)
+		opts.session->progress.set_update_callback([&opts]() {session_print_status(opts);});
+	  
+	/* add pass for output. */
+	ccl::Pass *pass = opts.scene->create_node<ccl::Pass>();
+	pass->set_name(ccl::ustring(opts.output_pass.c_str()));
+	pass->set_type(ccl::PASS_COMBINED);
+
+	opts.session->reset(opts.session_params, session_buffer_params(opts));
+	opts.session->start();
+
+	while(opts.session->progress.get_progress() < 1.f)
+		;
+	opts.session = nullptr;
+	m_cclSession  =nullptr;
+	session_exit(opts);
+}
+
+void unirender::cycles::Renderer::PopulateDebugScene()
+{
+	AddDebugSky();
+	auto *obj = AddDebugObject();
+	auto *shader = AddDebugShader();
+	auto *mesh = obj->get_geometry();
+
+	ccl::array<ccl::Node *> used_shaders = mesh->get_used_shaders();
+	used_shaders.push_back_slow(shader);
+	mesh->set_used_shaders(used_shaders);
 }
 
 bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string &outErr)
@@ -1262,51 +1416,39 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 
 	m_cclSession->scene = m_cclScene;
 
+	auto apiData = GetApiData();
+	auto renderDebugScene = false;
+	auto udmDebugScene = apiData.GetFromPath("cycles/debug/debug_scene");
+	udmDebugScene["enabled"](renderDebugScene);
+	if(renderDebugScene)
 	{
-		Options opts {};
+		std::string outputFileName;
+		if(!udmDebugScene["outputFileName"](outputFileName))
+		{
+			outputFileName = "temp/cycles/";
+			filemanager::create_path(outputFileName);
+			outputFileName = util::get_program_path() +'/' +outputFileName +"debug_scene.png";
+		}
+		std::vector<std::string> xmlFiles;
+		udmDebugScene["xmlFiles"](xmlFiles);
+		InitializeDebugScene(outputFileName,xmlFiles);
+		return false;
+	}
 
-		opts.width = 1024;
-		opts.height = 512;
-		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
-		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
-		opts.session = NULL;
-		opts.quiet = false;
-		opts.session_params.use_auto_tile = false;
-		opts.session_params.tile_size = 16;
-		opts.session_params.samples = 20;
+#if 0
+	{
+
 
 		{
-			auto &options = opts;
-	  options.output_pass = "combined";
-	  options.session = m_cclSession.get();//new ccl::Session(options.session_params, options.scene_params);
-
-	  if (!options.output_filepath.empty()) {
-		options.session->set_output_driver(make_unique<COIIOOutputDriver>(
-			options.output_filepath, options.output_pass, session_print));
-	  }
-
-	  if (options.session_params.background && !options.quiet)
-		  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
-	#ifdef WITH_CYCLES_STANDALONE_GUI
-	  else
-		options.session->progress.set_update_callback(function_bind(&view_redraw));
-	#endif
 
 	  /* load scene */
 	  //scene_init(options);
 	  {
-		  options.scene = options.session->scene;
-		  auto *cclScene = options.scene;
-		  auto *m_cclSession = options.session;
 				//auto &cclCam = *cclScene->camera;
-
-				umath::ScaledTransform pose {};
-				pose.SetOrigin(ToPragmaPosition({0.f,0.f,-4.f}));
 
 				{
 					//if(m_scene->GetSceneInfo().sky.empty() == false)
 					//	AddSkybox(m_scene->GetSceneInfo().sky);
-					AddDebugSky();
 					m_renderingStarted = true;
 	
 					auto &mdlCache = m_renderData.modelCache;
@@ -1373,148 +1515,14 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 				for(auto &cclShader : m_cclShaders)
 					cclShader->Finalize(*m_scene);
 
-				ccl::Mesh *cclMesh;
-				ccl::Shader *shader;
-				{
 
-					cclMesh = new ccl::Mesh{};
-					m_cclScene->geometry.push_back(cclMesh);
 
-					/* Create object. */
-					ccl::Object *object = new ccl::Object();
-					object->set_geometry(cclMesh);
-					ccl::Transform t = ccl::transform_identity();
-					object->set_tfm(t);
-					m_cclScene->objects.push_back(object);
-
-					cclMesh->name = "floor";
-					auto *mesh = cclMesh;
-					ccl::array<ccl::float3> P_array {};
-					P_array.push_back_slow(ccl::float3{-3.f,3.f,0.f});
-					P_array.push_back_slow(ccl::float3{3.f,3.f,0.f});
-					P_array.push_back_slow(ccl::float3{3.f,-3.f,0.f});
-					P_array.push_back_slow(ccl::float3{-3.f,-3.f,0.f});
-					mesh->set_verts(P_array);
-
-					size_t num_triangles = 0;
-					ccl::vector<int> nverts {};
-					nverts.push_back(4);
-					for (size_t i = 0; i < nverts.size(); i++)
-					  num_triangles += nverts[i] - 2;
-					mesh->reserve_mesh(mesh->get_verts().size(), num_triangles);
-
-					/* create triangles */
-					int index_offset = 0;
-
-					ccl::vector<int> verts;
-					verts.push_back(0);
-					verts.push_back(1);
-					verts.push_back(2);
-					verts.push_back(3);
-					  int ishader = 0;
-					  bool smooth = true;
-					for (size_t i = 0; i < nverts.size(); i++) {
-					  for (int j = 0; j < nverts[i] - 2; j++) {
-						int v0 = verts[index_offset];
-						int v1 = verts[index_offset + j + 1];
-						int v2 = verts[index_offset + j + 2];
-
-						assert(v0 < (int)P.size());
-						assert(v1 < (int)P.size());
-						assert(v2 < (int)P.size());
-
-						mesh->add_triangle(v0, v1, v2, ishader, smooth);
-					  }
-
-					  index_offset += nverts[i];
-					}
-
-				  /* we don't yet support arbitrary attributes, for now add vertex
-				   * coordinates as generated coordinates if requested */
-				  if (mesh->need_attribute(cclScene, ccl::ATTR_STD_GENERATED)) {
-					ccl::Attribute *attr = mesh->attributes.add(ccl::ATTR_STD_GENERATED);
-					memcpy(
-						attr->data_float3(), mesh->get_verts().data(), sizeof(ccl::float3) * mesh->get_verts().size());
-				  }
-
-					shader = new ccl::Shader{};
-					shader->name = "shader_test";
-						ccl::ShaderGraph *graph = new ccl::ShaderGraph();
-						ccl::GlossyBsdfNode *floorClosure = nullptr;
-						ccl::CheckerTextureNode *checker = nullptr;
-						{
-							const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"glossy_bsdf"});
-							auto snode = (ccl::GlossyBsdfNode *)node_type->create(node_type);
-							snode->set_owner(graph);
-							snode->name = ccl::ustring{"floor_closure2"};
-							snode->set(*find_type_input(*snode,"roughness"),0.2f);
-							snode->set(*find_type_input(*snode,"distribution"),"beckmann");
-							//snode->set_roughness(0.2f);
-							//snode->set_distribution(ccl::ClosureType::CLOSURE_BSDF_MICROFACET_BECKMANN_ID);
-							//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
-							graph->add(snode);
-							floorClosure = snode;
-
-							
-							{
-								const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"checker_texture"});
-								auto snode = (ccl::CheckerTextureNode *)node_type->create(node_type);
-								snode->set_owner(graph);
-								snode->name = ccl::ustring{"checker2"};
-								snode->set(*find_type_input(*snode,"color1"),ccl::float3{0.8f,0.8f,0.8f});
-								snode->set(*find_type_input(*snode,"color2"),ccl::float3{1.f,0.1f,0.1f});
-								//snode->set_color1({0.8f,0.8f,0.8f});
-								//snode->set_color2({1.f,0.1f,0.1f});
-								//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
-								graph->add(snode);
-								checker = snode;
-							}
-						}
-						{
-							graph->connect( find_output_socket(*checker,"color"),find_input_socket(*floorClosure,"color"));
-							graph->connect( find_output_socket(*floorClosure,"bsdf"),find_input_socket(*graph->output(),"surface"));
-						}
-					shader->set_graph(graph);
-					shader->tag_update(cclScene);
-					cclScene->shaders.push_back(shader);
-				}
-
-				ccl::xml_read_file(options.scene, options.filepath.c_str());
-				
-				static auto useXmlShader = false;
-				auto *targetshader = useXmlShader ? cclScene->shaders.back() : shader;
-
-				ccl::array<ccl::Node *> used_shaders = cclMesh->get_used_shaders();
-				used_shaders.push_back_slow(targetshader);
-				cclMesh->set_used_shaders(used_shaders);
-
-				if (!options.output_filepath.empty()) {
-				m_cclSession->set_output_driver(make_unique<COIIOOutputDriver>(
-					options.output_filepath, options.output_pass, session_print));
-				}
-
-				if (options.session_params.background && !options.quiet)
-					m_cclSession->progress.set_update_callback([&options]() {session_print_status(options);});
 	  }
 
-		  /* add pass for output. */
-		  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
-		  pass->set_name(ccl::ustring(options.output_pass.c_str()));
-		  pass->set_type(ccl::PASS_COMBINED);
-
-		  options.session->reset(options.session_params, session_buffer_params(options));
-		  options.session->start();
 
 		}
-		while(opts.session->progress.get_progress() < 1.f)
-			;
-		opts.session = nullptr;
-		m_cclSession  =nullptr;
-		session_exit(opts);
-		std::cout<<"ERRX"<<std::endl;
-		return false;
 	}
-
+#endif
 	m_cclSession->reset(m_cclSession->params,bufferParams);
 
 	if(m_scene->GetSceneInfo().sky.empty() == false)
@@ -1620,7 +1628,45 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	m_cclSession->set_display_driver(std::move(displayDriver));
 	m_cclSession->set_output_driver(std::move(outputDriver));
 
-	//ccl::xml_read_file(m_cclScene,"E:/projects/cycles/examples/scene_monkey.xml");
+	//
+	{
+		Options opts {};
+
+		opts.width = m_cclScene->camera->get_full_width();
+		opts.height = m_cclScene->camera->get_full_height();
+		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
+		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
+		opts.session = NULL;
+		opts.quiet = false;
+		opts.session_params.use_auto_tile = false;
+		opts.session_params.tile_size = 16;
+		opts.session_params.samples = 20;
+
+		
+			auto &options = opts;
+			 options.output_pass = "combined";
+			 options.session = m_cclSession.get();//new ccl::Session(options.session_params, options.scene_params);
+			 options.scene = options.session->scene;
+
+		m_cclSession->set_output_driver(std::make_unique<COIIOOutputDriver>(
+			"E:/projects/cycles/examples/scene_monkey.png", "combined", session_print));
+
+		m_cclSession->progress.set_update_callback([]() {});
+	  
+		/* add pass for output. */
+		//ccl::Pass *pass = opts.scene->create_node<ccl::Pass>();
+		//pass->set_name(ccl::ustring(opts.output_pass.c_str()));
+		//pass->set_type(ccl::PASS_COMBINED);
+		
+		options.session->reset(options.session_params, session_buffer_params(options));
+		m_cclSession->start();
+
+		while(m_cclSession->progress.get_progress() < 1.f)
+			;
+		m_cclSession = nullptr;
+		return false;
+	}
+
 	return true;
 }
 

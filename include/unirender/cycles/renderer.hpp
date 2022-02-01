@@ -110,6 +110,11 @@ namespace unirender::cycles
 		) const;
 
 		void AddDebugSky();
+		ccl::Mesh *AddDebugMesh();
+		ccl::Object *AddDebugObject();
+		ccl::Shader *AddDebugShader();
+		void InitializeDebugScene(const std::string &fileName,const std::vector<std::string> &xmlFileNames);
+		void PopulateDebugScene();
 
 		ccl::SessionParams GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const;
 		ccl::BufferParams GetBufferParameters() const;

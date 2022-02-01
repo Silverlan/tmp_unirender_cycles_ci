@@ -11,6 +11,7 @@
 #include "util_raytracing/mesh.hpp"
 #include "util_raytracing/exception.hpp"
 #include "unirender/cycles/renderer.hpp"
+#include <sharedutils/util_path.hpp>
 #include <scene/shader.h>
 #include <scene/shader_graph.h>
 #include <scene/scene.h>
@@ -106,7 +107,20 @@ ccl::NodeMathType unirender::cycles::to_ccl_type(unirender::nodes::math::MathTyp
 	static_assert(umath::to_integral(unirender::nodes::math::MathType::Add) == ccl::NodeMathType::NODE_MATH_ADD && umath::to_integral(unirender::nodes::math::MathType::SmoothMax) == ccl::NodeMathType::NODE_MATH_SMOOTH_MAX);
 	static_assert(umath::to_integral(unirender::nodes::math::MathType::Count) == 40);
 }
-ccl::NodeVectorMathType unirender::cycles::to_ccl_math_type(unirender::nodes::vector_math::MathType type)
+ccl::NodeVectorTransformType unirender::cycles::to_ccl_type(unirender::nodes::vector_transform::Type type)
+{
+	switch(type)
+	{
+	case unirender::nodes::vector_transform::Type::Vector:
+		return ccl::NodeVectorTransformType::NODE_VECTOR_TRANSFORM_TYPE_VECTOR;
+	case unirender::nodes::vector_transform::Type::Point:
+		return ccl::NodeVectorTransformType::NODE_VECTOR_TRANSFORM_TYPE_POINT;
+	case unirender::nodes::vector_transform::Type::Normal:
+		return ccl::NodeVectorTransformType::NODE_VECTOR_TRANSFORM_TYPE_NORMAL;
+	};
+	static_assert(umath::to_integral(unirender::nodes::vector_transform::Type::Count) == 4);
+}
+ccl::NodeVectorMathType unirender::cycles::to_ccl_type(unirender::nodes::vector_math::MathType type)
 {
 	switch(type)
 	{
@@ -385,7 +399,28 @@ std::shared_ptr<unirender::CCLShader> unirender::CCLShader::Create(cycles::Rende
 	auto *cclShader = new ccl::Shader{}; // Object will be removed automatically by cycles
 	cclShader->name = desc.GetName();
 	renderer.GetCclScene()->shaders.push_back(cclShader);
-	return Create(renderer,*cclShader,desc,true);
+	shader = Create(renderer,*cclShader,desc,true);
+	auto apiData = renderer.GetApiData();
+
+	auto dontSimplify = false;
+	apiData.GetFromPath("cycles/shader/dontSimplifyGraphs")(dontSimplify);
+	if(!dontSimplify)
+		shader->m_cclGraph.simplify(renderer.GetCclScene());
+
+	auto dumpGraphs = false;
+	apiData.GetFromPath("cycles/debug/dump_shader_graphs")(dumpGraphs);
+	if(dumpGraphs)
+	{
+		auto &graph = shader->m_cclGraph;
+		auto localDumpPath = util::Path::CreatePath("temp/cycles/graph_dump");
+		filemanager::create_path(localDumpPath.GetString());
+		auto dumpPath = util::Path::CreatePath(util::get_program_path()) +localDumpPath;
+		auto idx = desc.GetIndex();
+		std::string fileName = "graph_" +util::uuid_to_string(util::generate_uuid_v4()) +".txt";
+		auto filePath = dumpPath +util::Path::CreateFile(fileName);
+		graph.dump_graph(filePath.GetString().c_str());
+	}
+	return shader;
 }
 
 unirender::CCLShader::CCLShader(cycles::Renderer &renderer,ccl::Shader &cclShader,ccl::ShaderGraph &cclShaderGraph)
@@ -526,9 +561,16 @@ void unirender::CCLShader::InitializeNode(const NodeDesc &desc,std::unordered_ma
 						auto *fromSocketDesc = fromNode->FindPropertyDesc(fromSocketName);
 						// This is a special case where the input socket is actually a property,
 						// so instead of linking, we just assign the property value directly.
-						auto *prop = FindProperty(*cclToSocket->first,cclToSocket->second);
-						if(fromSocketDesc && fromSocketDesc->dataValue.value && prop)
-							ApplySocketValue(*fromSocketDesc,*cclToSocket->first,*prop);
+						auto inputName = TranslateInputName(*cclToSocket->first,cclToSocket->second);
+						auto *prop = FindProperty(*cclToSocket->first,inputName);
+						if(fromSocketDesc && fromSocketDesc->dataValue.value)
+						{
+							if(prop)
+								ApplySocketValue(*cclToSocket->first,inputName,*fromSocketDesc,*cclToSocket->first,*prop);
+							else
+								m_renderer.GetScene().HandleError("Attempted to use unknown property '" +inputName +"' with node of type '" +std::string{typeid(*cclToSocket->first).name()} +"'!");
+						}
+							
 					}
 				}
 				continue;
@@ -576,12 +618,15 @@ void unirender::CCLShader::InitializeNode(const NodeDesc &desc,std::unordered_ma
 		virtual ccl::ShaderNode *GetOutputNode() override {return node;}
 		ccl::ShaderNode *node = nullptr;
 	};
+
 	auto *snode = AddNode(typeName);
 	std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> wrapper = nullptr;
+	auto isCclNode = false;
 	if(snode != nullptr)
 	{
 		wrapper = std::make_unique<CclNodeWrapper>();
 		static_cast<CclNodeWrapper*>(wrapper.get())->node = snode;
+		isCclNode = true;
 	}
 	else
 	{
@@ -596,19 +641,31 @@ void unirender::CCLShader::InitializeNode(const NodeDesc &desc,std::unordered_ma
 	for(auto &pair : desc.GetInputs())
 	{
 		ccl::ShaderNode *node;
-		auto *input = wrapper->FindInput(pair.first,&node);
+		auto inputName = pair.first;
+		if(isCclNode)
+			inputName = TranslateInputName(*static_cast<CclNodeWrapper*>(wrapper.get())->node,inputName);
+		auto *input = wrapper->FindInput(inputName,&node);
 		if(input == nullptr)
-			continue; // TODO
-		ApplySocketValue(pair.second,*node,input->socket_type);
+		{
+			m_renderer.GetScene().HandleError("Attempted to use unknown input '" +pair.first +"' with node of type '" +typeName +"'!");
+			continue;
+		}
+		ApplySocketValue(*node,inputName,pair.second,*node,input->socket_type);
 	}
 
 	for(auto &pair : desc.GetProperties())
 	{
 		ccl::ShaderNode *node;
-		auto *type = wrapper->FindProperty(pair.first,&node);
+		auto inputName = pair.first;
+		if(isCclNode)
+			inputName = TranslateInputName(*static_cast<CclNodeWrapper*>(wrapper.get())->node,inputName);
+		auto *type = wrapper->FindProperty(inputName,&node);
 		if(type == nullptr)
-			continue; // TODO
-		ApplySocketValue(pair.second,*node,*type);
+		{
+			m_renderer.GetScene().HandleError("Attempted to use unknown property '" +pair.first +"' with node of type '" +typeName +"'!");
+			continue;
+		}
+		ApplySocketValue(*node,inputName,pair.second,*node,*type);
 	}
 
 	nodeToCclNode[&desc] = wrapper->GetOutputNode();
@@ -624,8 +681,83 @@ template<typename TSrc,typename TDst>
 	return output;
 }
 
-void unirender::CCLShader::ApplySocketValue(const NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType)
+std::string unirender::CCLShader::TranslateInputName(const ccl::ShaderNode &node,const std::string &inputName)
 {
+	// Some Cycles node socket names don't match ours (due to Cycles updates or other reasons), so we'll have to translate them here
+	if(typeid(node) == typeid(ccl::MathNode))
+	{
+		if(ustring::compare(inputName.c_str(),unirender::nodes::math::IN_TYPE,false))
+			return "math_type";
+	}
+	else if(typeid(node) == typeid(ccl::MappingNode))
+	{
+		if(ustring::compare(inputName.c_str(),unirender::nodes::mapping::IN_TYPE,false))
+			return "mapping_type";
+	}
+	else if(typeid(node) == typeid(ccl::MixNode))
+	{
+		if(ustring::compare(inputName.c_str(),unirender::nodes::mix::IN_TYPE,false))
+			return "mix_type";
+	}
+	else if(typeid(node) == typeid(ccl::VectorMathNode))
+	{
+		if(ustring::compare(inputName.c_str(),unirender::nodes::vector_math::IN_TYPE,false))
+			return "math_type";
+	}
+	else if(typeid(node) == typeid(ccl::VectorTransformNode))
+	{
+		if(ustring::compare(inputName.c_str(),unirender::nodes::vector_transform::IN_TYPE,false))
+			return "transform_type";
+	}
+	return inputName;
+}
+
+template<typename TCcl,typename TEnum>
+	static bool apply_translated_socket_value(
+		const ccl::ShaderNode &shaderNode,const std::string &socketName,const std::string &targetSocketName,
+		const unirender::NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType
+	)
+{
+	if(typeid(shaderNode) != typeid(TCcl))
+		return false;
+	if(!ustring::compare(socketName.c_str(),targetSocketName.c_str(),false))
+		return false;
+	if(sockDesc.dataValue.type != unirender::SocketType::Enum)
+		return false;
+	auto val = *static_cast<unirender::STEnum*>(sockDesc.dataValue.value.get());
+	val = unirender::cycles::to_ccl_enum<TEnum>(val);
+	node.set(sockType,val);
+	return true;
+}
+
+void unirender::CCLShader::ApplySocketValue(const ccl::ShaderNode &shaderNode,const std::string &socketName,const NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType)
+{
+	if(apply_translated_socket_value<ccl::MathNode,unirender::nodes::math::MathType>(shaderNode,socketName,"math_type",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::MappingNode,unirender::nodes::mapping::Type>(shaderNode,socketName,"mapping_type",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::MixNode,unirender::nodes::mix::Mix>(shaderNode,socketName,"mix_type",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::VectorMathNode,unirender::nodes::vector_math::MathType>(shaderNode,socketName,"math_type",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::VectorTransformNode,unirender::nodes::vector_transform::Type>(shaderNode,socketName,"transform_type",sockDesc,node,sockType))
+		return;
+
+	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::InterpolationType>(shaderNode,socketName,"interpolation",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::ExtensionType>(shaderNode,socketName,"extension",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::Projection>(shaderNode,socketName,"projection",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::AlphaType>(shaderNode,socketName,"alpha_type",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::VectorTransformNode,unirender::nodes::vector_transform::ConvertSpace>(shaderNode,socketName,"convert_from",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::VectorTransformNode,unirender::nodes::vector_transform::ConvertSpace>(shaderNode,socketName,"convert_to",sockDesc,node,sockType))
+		return;
+	if(apply_translated_socket_value<ccl::NormalMapNode,unirender::nodes::normal_map::Space>(shaderNode,socketName,"space",sockDesc,node,sockType))
+		return;
+
 	switch(sockDesc.dataValue.type)
 	{
 	case SocketType::Bool:
@@ -787,18 +919,20 @@ void unirender::CCLShader::InitializeNodeGraph(const GroupNodeDesc &desc)
 	InitializeNode(desc,nodeToCclNode,groupIoSockets);
 }
 
-const ccl::SocketType *unirender::CCLShader::FindProperty(ccl::ShaderNode &node,const std::string &inputName) const
+const ccl::SocketType *unirender::CCLShader::FindProperty(ccl::ShaderNode &node,const std::string &inputName)
 {
-	auto it = std::find_if(node.type->inputs.begin(),node.type->inputs.end(),[&inputName](const ccl::SocketType &socketType) {
-		return ccl::string_iequals(socketType.name.string(),inputName);
+	auto translatedInputName = TranslateInputName(node,inputName);
+	auto it = std::find_if(node.type->inputs.begin(),node.type->inputs.end(),[&translatedInputName](const ccl::SocketType &socketType) {
+		return ccl::string_iequals(socketType.name.string(),translatedInputName);
 	});
 	return (it != node.type->inputs.end()) ? &*it : nullptr;
 }
 ccl::ShaderInput *unirender::CCLShader::FindInput(ccl::ShaderNode &node,const std::string &inputName)
 {
 	// return node.input(ccl::ustring{inputName}); // Doesn't work in some cases for some reason
-	auto it = std::find_if(node.inputs.begin(),node.inputs.end(),[&inputName](const ccl::ShaderInput *shInput) {
-		return ccl::string_iequals(shInput->socket_type.name.string(),inputName);
+	auto translatedInputName = TranslateInputName(node,inputName);
+	auto it = std::find_if(node.inputs.begin(),node.inputs.end(),[&translatedInputName](const ccl::ShaderInput *shInput) {
+		return ccl::string_iequals(shInput->socket_type.name.string(),translatedInputName);
 	});
 	return (it != node.inputs.end()) ? *it : nullptr;
 }

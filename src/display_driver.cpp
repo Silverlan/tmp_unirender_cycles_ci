@@ -13,7 +13,6 @@ unirender::cycles::DisplayDriver::DisplayDriver(uint32_t width,uint32_t height)
 	: m_width{width},m_height{height}
 {
 	m_imageBuffer = uimg::ImageBuffer::Create(width,height,uimg::Format::RGBA16);
-	m_imageBuffer->Clear(Color::Red);
 }
 void unirender::cycles::DisplayDriver::next_tile_begin()
 {
@@ -35,7 +34,7 @@ ccl::half4 *unirender::cycles::DisplayDriver::map_texture_buffer()
 void unirender::cycles::DisplayDriver::unmap_texture_buffer() {}
 void unirender::cycles::DisplayDriver::clear()
 {
-	//m_imageBuffer->Clear(Vector4{});
+	m_imageBuffer->Clear(Vector4{});
 }
 void unirender::cycles::DisplayDriver::draw(const Params &params)
 {

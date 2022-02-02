@@ -709,7 +709,8 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 		ulighting::cycles::lumen_to_watt_area(light.GetIntensity(),light.GetColor());
 
 	// Multiple importance sampling. It's disabled by default for some reason, but it's usually best to keep it on.
-	cclLight->set_use_mis(true);
+	// cclLight->set_use_mis(true);
+	// Update: Enabling MIS turns all lights into bright white circles in Cycles X, so it's disabled for now.
 
 	//static float lightIntensityFactor = 10.f;
 	//watt *= lightIntensityFactor;
@@ -719,8 +720,10 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 	cclLight->set_strength(ccl::float3{color.r,color.g,color.b} *watt);
 	cclLight->set_size(ToCyclesLength(light.GetSize()));
 	cclLight->set_co(ToCyclesPosition(light.GetPos()));
+
 	cclLight->set_max_bounces(1'024);
 	cclLight->set_map_resolution(2'048);
+	// 
 	// Test
 	/*m_light->strength = ccl::float3{0.984539f,1.f,0.75f} *40.f;
 	m_light->size = 0.25f;
@@ -1173,6 +1176,34 @@ ccl::Object *unirender::cycles::Renderer::AddDebugObject()
 	m_cclScene->objects.push_back(object);
 	return object;
 }
+void unirender::cycles::Renderer::AddDebugLight()
+{
+	auto *shader = new ccl::Shader{};
+	shader->name = "point_shader";
+	ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+	
+	const ccl::NodeType *emissionType = ccl::NodeType::find(ccl::ustring{"emission"});
+	auto emissionNode = (ccl::EmissionNode *)emissionType->create(emissionType);
+	emissionNode->set_owner(graph);
+	emissionNode->name = ccl::ustring{"emission"};
+	emissionNode->set_color(ccl::float3{0.8f,0.1f,0.1f} *100.f);
+	graph->add(emissionNode);
+
+	graph->connect( find_output_socket(*emissionNode,"emission"),find_input_socket(*graph->output(),"surface"));
+	
+	shader->set_graph(graph);
+	shader->tag_update(m_cclScene);
+	m_cclScene->shaders.push_back(shader);
+
+	//
+
+	auto *light = new ccl::Light{};
+	m_cclScene->lights.push_back(light);
+	light->set_light_type(ccl::LightType::LIGHT_POINT);
+	light->set_shader(shader);
+	light->set_size(1.f);
+	light->set_co({0.f,0.f,1.f});
+}
 ccl::Shader *unirender::cycles::Renderer::AddDebugShader()
 {
 	auto *shader = new ccl::Shader{};
@@ -1263,6 +1294,7 @@ void unirender::cycles::Renderer::PopulateDebugScene()
 	auto *obj = AddDebugObject();
 	auto *shader = AddDebugShader();
 	auto *mesh = obj->get_geometry();
+	AddDebugLight();
 
 	ccl::array<ccl::Node *> used_shaders = mesh->get_used_shaders();
 	used_shaders.push_back_slow(shader);
@@ -1271,138 +1303,9 @@ void unirender::cycles::Renderer::PopulateDebugScene()
 
 bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string &outErr)
 {
-#if 0
-	{
-		Options opts {};
-
-		opts.width = 1024;
-		opts.height = 512;
-		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
-		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
-		opts.session = NULL;
-		opts.quiet = false;
-		opts.session_params.use_auto_tile = false;
-		opts.session_params.tile_size = 16;
-		opts.session_params.samples = 20;
-
-		session_init(opts);
-		while(opts.session->progress.get_progress() < 1.f)
-			;
-		session_exit(opts);
-		std::cout<<"ERRX"<<std::endl;
-		return false;
-	}
-#endif
-
-#if 0
-	{
-		Options opts {};
-
-		opts.width = 1024;
-		opts.height = 512;
-		opts.filepath = "E:/projects/cycles/examples/scene_monkey.xml";
-		opts.output_filepath = "E:/projects/cycles/examples/scene_monkey.png";
-		opts.session = NULL;
-		opts.quiet = false;
-		opts.session_params.use_auto_tile = false;
-		opts.session_params.tile_size = 16;
-		opts.session_params.samples = 20;
-
-		{
-			auto &options = opts;
-  options.output_pass = "combined";
-  options.session = new ccl::Session(options.session_params, options.scene_params);
-
-  if (!options.output_filepath.empty()) {
-    options.session->set_output_driver(make_unique<COIIOOutputDriver>(
-        options.output_filepath, options.output_pass, session_print));
-  }
-
-  if (options.session_params.background && !options.quiet)
-	  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
-#ifdef WITH_CYCLES_STANDALONE_GUI
-  else
-    options.session->progress.set_update_callback(function_bind(&view_redraw));
-#endif
-
-  /* load scene */
-  //scene_init(options);
-  {
-	  options.scene = options.session->scene;
-	  auto *cclScene = options.scene;
-	  auto *m_cclSession = options.session;
-			auto &cclCam = *cclScene->camera;
-
-			umath::ScaledTransform pose {};
-			pose.SetOrigin(ToPragmaPosition({0.f,0.f,-4.f}));
-			cclCam.set_matrix(ToCyclesTransform(pose,true));
-			 cclCam.set_camera_type(ccl::CameraType::CAMERA_PERSPECTIVE);
-			cclCam.compute_auto_viewplane();
-			 cclCam.need_flags_update = true;
-			 cclCam.update(cclScene);
-
-			auto bg =  cclScene->background;
-
-			 ccl::Shader *shader = cclScene->default_background;
-			 ccl::ShaderGraph *graph = new ccl::ShaderGraph();
-			 ccl::SkyTextureNode *skyN = nullptr;
-			 {
-				 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"sky_texture"});
-				auto snode = (ccl::SkyTextureNode *)node_type->create(node_type);
-				snode->set_owner(graph);
-				snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
-				snode->name = ccl::ustring{"tex"};
-				graph->add(snode);
-				skyN = snode;
-			 }
-			 ccl::BackgroundNode *bgN = nullptr;
-			 {
-				 const ccl::NodeType *node_type = ccl::NodeType::find(ccl::ustring{"background_shader"});
-				auto snode = (ccl::BackgroundNode *)node_type->create(node_type);
-				snode->set_owner(graph);
-				snode->set_strength(8.f);
-				snode->set_color({1.f,0.f,0.f});
-				snode->name = ccl::ustring{"bg"};
-				graph->add(snode);
-				bgN = snode;
-			 }
-			 {
-				graph->connect( find_output_socket(*skyN,"color"),find_input_socket(*bgN,"color"));
-				 graph->connect( find_output_socket(*bgN,"background"),find_input_socket(*graph->output(),"surface"));
-			 }
-			shader->set_graph(graph);
-			shader->tag_update(cclScene);
-
-			if (!options.output_filepath.empty()) {
-			m_cclSession->set_output_driver(make_unique<COIIOOutputDriver>(
-				options.output_filepath, options.output_pass, session_print));
-			}
-
-			if (options.session_params.background && !options.quiet)
-				m_cclSession->progress.set_update_callback([&options]() {session_print_status(options);});
-  }
-
-  /* add pass for output. */
-  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
-  pass->set_name(ccl::ustring(options.output_pass.c_str()));
-  pass->set_type(ccl::PASS_COMBINED);
-
-  options.session->reset(options.session_params, session_buffer_params(options));
-  options.session->start();
-
-		}
-		while(opts.session->progress.get_progress() < 1.f)
-			;
-		session_exit(opts);
-		std::cout<<"ERRX"<<std::endl;
-		return false;
-	}
-#endif
-
 	auto devInfo = InitializeDevice(scene);
 	if(devInfo.has_value() == false)
 		return false;
-
 
 	AddOutput(OUTPUT_COLOR);
 	if(m_scene->ShouldDenoise())
@@ -1435,94 +1338,6 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		return false;
 	}
 
-#if 0
-	{
-
-
-		{
-
-	  /* load scene */
-	  //scene_init(options);
-	  {
-				//auto &cclCam = *cclScene->camera;
-
-				{
-					//if(m_scene->GetSceneInfo().sky.empty() == false)
-					//	AddSkybox(m_scene->GetSceneInfo().sky);
-					m_renderingStarted = true;
-	
-					auto &mdlCache = m_renderData.modelCache;
-					mdlCache->GenerateData();
-					uint32_t numObjects = 0;
-					uint32_t numMeshes = 0;
-					for(auto &chunk : mdlCache->GetChunks())
-					{
-						numObjects += chunk.GetObjects().size();
-						numMeshes += chunk.GetMeshes().size();
-					}
-					m_cclScene->objects.reserve(m_cclScene->objects.size() +numObjects);
-					m_cclScene->geometry.reserve(m_cclScene->geometry.size() +numMeshes);
-
-					auto &cam = scene.GetCamera();
-					SyncCamera(cam);
-
-					// Note: Lights and objects have to be initialized before shaders, because they may
-					// create additional shaders.
-					auto &lights = scene.GetLights();
-					m_cclScene->lights.reserve(lights.size());
-					for(auto &light : lights)
-					{
-						light->Finalize(scene);
-						SyncLight(scene,*light);
-					}
-					for(auto &chunk : mdlCache->GetChunks())
-					{
-						for(auto &o : chunk.GetObjects())
-							o->Finalize(*m_scene);
-						for(auto &o : chunk.GetMeshes())
-							o->Finalize(*m_scene);
-					}
-					for(auto &chunk : mdlCache->GetChunks())
-					{
-						for(auto &o : chunk.GetMeshes())
-							SyncMesh(*o);
-					}
-					for(auto &chunk : mdlCache->GetChunks())
-					{
-						for(auto &o : chunk.GetObjects())
-							SyncObject(*o);
-					}
-					for(auto &shader : m_renderData.shaderCache->GetShaders())
-						shader->Finalize();
-					for(auto &cclShader : m_cclShaders)
-						cclShader->Finalize(*m_scene);
-
-					constexpr auto validate = false;
-					if constexpr(validate)
-					{
-						for(auto &chunk : m_renderData.modelCache->GetChunks())
-						{
-							for(auto &o : chunk.GetObjects())
-							{
-								auto &mesh = o->GetMesh();
-								mesh.Validate();
-							}
-						}
-					}
-				}
-
-
-				for(auto &cclShader : m_cclShaders)
-					cclShader->Finalize(*m_scene);
-
-
-
-	  }
-
-
-		}
-	}
-#endif
 	m_cclSession->reset(m_cclSession->params,bufferParams);
 
 	if(m_scene->GetSceneInfo().sky.empty() == false)
@@ -1544,14 +1359,21 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	auto &cam = scene.GetCamera();
 	SyncCamera(cam);
 
-	// Note: Lights and objects have to be initialized before shaders, because they may
-	// create additional shaders.
-	auto &lights = scene.GetLights();
-	m_cclScene->lights.reserve(lights.size());
-	for(auto &light : lights)
+	auto addDebugLight = false;
+	auto udmDebugLight = apiData.GetFromPath("cycles/debug/debug_light")(addDebugLight);
+	if(addDebugLight)
+		AddDebugLight();
+	else
 	{
-		light->Finalize(scene);
-		SyncLight(scene,*light);
+		// Note: Lights and objects have to be initialized before shaders, because they may
+		// create additional shaders.
+		auto &lights = scene.GetLights();
+		m_cclScene->lights.reserve(lights.size());
+		for(auto &light : lights)
+		{
+			light->Finalize(scene);
+			SyncLight(scene,*light);
+		}
 	}
 	for(auto &chunk : mdlCache->GetChunks())
 	{

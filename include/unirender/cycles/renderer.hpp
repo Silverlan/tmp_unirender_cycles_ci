@@ -113,6 +113,7 @@ namespace unirender::cycles
 		ccl::Mesh *AddDebugMesh();
 		ccl::Object *AddDebugObject();
 		ccl::Shader *AddDebugShader();
+		void AddDebugLight();
 		void InitializeDebugScene(const std::string &fileName,const std::vector<std::string> &xmlFileNames);
 		void PopulateDebugScene();
 

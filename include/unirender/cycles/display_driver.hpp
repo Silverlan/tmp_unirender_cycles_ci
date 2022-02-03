@@ -10,15 +10,28 @@
 
 #include <session/display_driver.h>
 #include <session/output_driver.h>
+#include <util_image_types.hpp>
 #include <mathutil/uvec.h>
+#include <unordered_map>
 #include <memory>
 #include <vector>
 
 namespace uimg {class ImageBuffer;};
 namespace unirender::cycles
 {
+	class BaseDriver
+	{
+	public:
+		BaseDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height);
+		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer(const std::string &pass) const;
+	protected:
+		uint32_t m_width = 0;
+		uint32_t m_height = 0;
+		std::unordered_map<std::string,std::shared_ptr<uimg::ImageBuffer>> m_imageBuffers;
+	};
+
 	class DisplayDriver
-		: public ccl::DisplayDriver
+		: public ccl::DisplayDriver,public BaseDriver
 	{
 	public:
 		DisplayDriver(uint32_t width,uint32_t height);
@@ -30,18 +43,13 @@ namespace unirender::cycles
 		virtual void clear() override;
 		virtual void draw(const Params &params) override;
 
-		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer() const {return m_imageBuffer;}
-	private:
-		uint32_t m_width = 0;
-		uint32_t m_height = 0;
-		std::shared_ptr<uimg::ImageBuffer> m_imageBuffer = nullptr;
 	};
 
 	class OutputDriver
-		: public ccl::OutputDriver
+		: public ccl::OutputDriver,public BaseDriver
 	{
 	public:
-		OutputDriver(uint32_t width,uint32_t height);
+		OutputDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height);
 		/* Write tile once it has finished rendering. */
 		virtual void write_render_tile(const Tile &tile) override;
 
@@ -53,12 +61,7 @@ namespace unirender::cycles
 		* to determine which shading points to use for baking at each pixel. Return
 		* true if any data was read. */
 		virtual bool read_render_tile(const Tile & /* tile */) override;
-
-		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer() const {return m_imageBuffer;}
 	private:
-		uint32_t m_width = 0;
-		uint32_t m_height = 0;
-		std::shared_ptr<uimg::ImageBuffer> m_imageBuffer = nullptr;
 		std::vector<Vector4> m_tileData;
 	};
 };

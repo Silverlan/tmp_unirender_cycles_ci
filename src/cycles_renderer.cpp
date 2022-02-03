@@ -184,6 +184,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 	sessionParams.shadingsystem = ccl::SHADINGSYSTEM_SVM;
 	sessionParams.device = devInfo;
 	sessionParams.background = true;
+	sessionParams.use_auto_tile = false;
 
 	switch(m_deviceType)
 	{
@@ -460,7 +461,7 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 
 	auto apiData = GetApiData();
 	auto useDebugMeshShader = false;
-	apiData.GetFromPath("cycles/debug/use_debug_mesh_shader")(useDebugMeshShader);
+	apiData.GetFromPath("cycles/debug/useDebugMeshShader")(useDebugMeshShader);
 	if(useDebugMeshShader)
 	{
 		for(auto i=decltype(shaders.size()){0u};i<shaders.size();++i)
@@ -760,9 +761,9 @@ void unirender::cycles::Renderer::Wait()
 
 std::shared_ptr<uimg::ImageBuffer> unirender::cycles::Renderer::FinalizeCyclesScene()
 {
-	auto *driver = GetDisplayDriver();
+	auto *driver = GetOutputDriver();
 	assert(driver);
-	return driver->GetImageBuffer();
+	return driver->GetImageBuffer(OUTPUT_COLOR);
 #if 0
 	// Note: We want the HDR output values from cycles which haven't been tonemapped yet, but Cycles
 	// makes this impossible to do, so we'll have to use this work-around.
@@ -1018,72 +1019,6 @@ void COIIOOutputDriver::write_render_tile(const Tile &tile)
   image_output->close();
 }
 
-static void session_init(Options &options)
-{
-  options.output_pass = "combined";
-  options.session = new ccl::Session(options.session_params, options.scene_params);
-
-  if (!options.output_filepath.empty()) {
-    options.session->set_output_driver(make_unique<COIIOOutputDriver>(
-        options.output_filepath, options.output_pass, session_print));
-  }
-
-  if (options.session_params.background && !options.quiet)
-	  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
-#ifdef WITH_CYCLES_STANDALONE_GUI
-  else
-    options.session->progress.set_update_callback(function_bind(&view_redraw));
-#endif
-
-  /* load scene */
-  scene_init(options);
-
-  /* add pass for output. */
-  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
-  pass->set_name(ccl::ustring(options.output_pass.c_str()));
-  pass->set_type(ccl::PASS_COMBINED);
-
-  options.session->reset(options.session_params, session_buffer_params(options));
-  options.session->start();
-}
-
-static void session_x(Options &options)
-{
-  options.output_pass = "combined";
-  if (!options.output_filepath.empty()) {
-    options.session->set_output_driver(make_unique<COIIOOutputDriver>(
-        options.output_filepath, options.output_pass, session_print));
-  }
-
-  if (options.session_params.background && !options.quiet)
-	  options.session->progress.set_update_callback([&options]() {session_print_status(options);});
-#ifdef WITH_CYCLES_STANDALONE_GUI
-  else
-    options.session->progress.set_update_callback(function_bind(&view_redraw));
-#endif
-
-  /* add pass for output. */
-  ccl::Pass *pass = options.scene->create_node<ccl::Pass>();
-  pass->set_name(ccl::ustring(options.output_pass.c_str()));
-  pass->set_type(ccl::PASS_COMBINED);
-
-  options.session->reset(options.session_params, session_buffer_params(options));
-  options.session->start();
-}
-
-static void session_exit(Options &options)
-{
-  if (options.session) {
-    delete options.session;
-    options.session = NULL;
-  }
-
-  if (options.session_params.background && !options.quiet) {
-    session_print("Finished Rendering.");
-    //printf("\n");
-  }
-}
-
 void unirender::cycles::Renderer::AddDebugSky()
 {
 	auto *shader = m_cclScene->default_background;
@@ -1285,7 +1220,6 @@ void unirender::cycles::Renderer::InitializeDebugScene(const std::string &fileNa
 		;
 	opts.session = nullptr;
 	m_cclSession  =nullptr;
-	session_exit(opts);
 }
 
 void unirender::cycles::Renderer::PopulateDebugScene()
@@ -1443,14 +1377,24 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		m_tileManager.SetExposure(sceneInfo.exposure);
 	}
 
+	std::vector<std::pair<std::string,uimg::Format>> passes;
+	passes.reserve(m_outputs.size());
+	for(auto &pair : m_outputs)
+	{
+		if(pair.first == OUTPUT_COLOR)
+			passes.push_back({pair.first,uimg::Format::RGBA32});
+		else
+			passes.push_back({pair.first,uimg::Format::RGB32});
+	}
 	auto displayDriver = std::make_unique<DisplayDriver>(cam.GetWidth(),cam.GetHeight());
 	m_displayDriver = displayDriver.get();
-	auto outputDriver = std::make_unique<OutputDriver>(cam.GetWidth(),cam.GetHeight());
+	auto outputDriver = std::make_unique<OutputDriver>(passes,cam.GetWidth(),cam.GetHeight());
 	m_outputDriver = outputDriver.get();
 	m_cclSession->set_display_driver(std::move(displayDriver));
 	m_cclSession->set_output_driver(std::move(outputDriver));
 
 	//
+#if 0
 	{
 		Options opts {};
 
@@ -1472,6 +1416,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 
 		m_cclSession->set_output_driver(std::make_unique<COIIOOutputDriver>(
 			"E:/projects/cycles/examples/scene_monkey.png", "combined", session_print));
+		m_cclSession->set_display_driver(std::make_unique<DisplayDriver>(opts.width,opts.height));
 
 		m_cclSession->progress.set_update_callback([]() {});
 	  
@@ -1480,15 +1425,17 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		//pass->set_name(ccl::ustring(opts.output_pass.c_str()));
 		//pass->set_type(ccl::PASS_COMBINED);
 		
-		options.session->reset(options.session_params, session_buffer_params(options));
+		//options.session->reset(options.session_params, session_buffer_params(options));
+		m_cclSession->reset(m_cclSession->params,bufferParams);
 		m_cclSession->start();
 
 		while(m_cclSession->progress.get_progress() < 1.f)
 			;
+		m_cclSession->draw();
 		m_cclSession = nullptr;
 		return false;
 	}
-
+#endif
 	return true;
 }
 
@@ -1884,7 +1831,6 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			// Render image with lighting
 			auto progressMultiplier = (m_scene->GetDenoiseMode() == Scene::DenoiseMode::Detailed) ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
-				m_cclSession->draw(); // TODO
 				if(m_progressiveRefine == false)
 					m_cclSession->wait();
 				else if(m_progressiveRunning)
@@ -1904,12 +1850,25 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 
 				if(m_scene->ShouldDenoise() == false)
 					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
-				if(m_scene->GetDenoiseMode() == Scene::DenoiseMode::Fast)
+
+				auto &albedoImageBuffer = GetResultImageBuffer(OUTPUT_ALBEDO,eyeStage);
+				auto &normalImageBuffer = GetResultImageBuffer(OUTPUT_NORMAL,eyeStage);
+				albedoImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_ALBEDO);
+				normalImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
+				assert(albedoImageBuffer != nullptr);
+				assert(normalImageBuffer != nullptr);
+
+				std::string debugPass;
+				GetApiData().GetFromPath("debug/returnPassAsResult")(debugPass);
+				if(!debugPass.empty())
 				{
-					// Skip albedo/normal render passes and just go straight to denoising
-					return StartNextRenderStage(worker,ImageRenderStage::Denoise,eyeStage);
+					auto *imgBuf = FindResultImageBuffer(debugPass,eyeStage);
+					if(imgBuf)
+						resultImageBuffer = imgBuf->Copy(uimg::Format::RGBA_FLOAT);
+					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
 				}
-				return StartNextRenderStage(worker,ImageRenderStage::Albedo,eyeStage);
+
+				return StartNextRenderStage(worker,ImageRenderStage::Denoise,eyeStage);
 			});
 		});
 		break;
@@ -2006,7 +1965,7 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 {
 	for(;;)
 	{
-		worker.UpdateProgress(baseProgress +m_cclSession->progress.get_progress() *progressMultiplier);
+		worker.UpdateProgress(baseProgress +umath::min(m_cclSession->progress.get_progress(),1.0) *progressMultiplier);
 
 		if(worker.IsCancelled())
 			SetCancelled("Cancelled by application.");
@@ -2036,7 +1995,7 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 			worker.SetStatus(util::JobStatus::Failed,m_cclSession->progress.get_error_message());
 			break;
 		}
-		if(m_cclSession->progress.get_progress() == 1.f)
+		if(umath::min(m_cclSession->progress.get_progress(),1.0) == 1.0)
 			break;
 		std::this_thread::sleep_for(std::chrono::seconds{1});
 	}
@@ -2555,9 +2514,33 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	session.params.use_profiling = false;
 	session.params.shadingsystem = ccl::ShadingSystem::SHADINGSYSTEM_SVM;
 
-	auto *pass = scene.create_node<ccl::Pass>();
-	pass->set_name(ccl::ustring{"combined"});
-	pass->set_type(ccl::PASS_COMBINED);
+	for(auto &pair : m_outputs)
+	{
+		if(pair.first == OUTPUT_COLOR)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_COLOR});
+			pass->set_type(ccl::PASS_COMBINED);
+		}
+		else if(pair.first == OUTPUT_ALBEDO)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_ALBEDO});
+			pass->set_type(ccl::PASS_DENOISING_ALBEDO);
+		}
+		else if(pair.first == OUTPUT_NORMAL)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_NORMAL});
+			pass->set_type(ccl::PASS_DENOISING_NORMAL);
+		}
+		else if(pair.first == OUTPUT_DEPTH)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_DEPTH});
+			pass->set_type(ccl::PASS_DENOISING_DEPTH);
+		}
+	}
 
 #if 0
 	ccl::vector<ccl::BufferPass> passes;

@@ -37,16 +37,23 @@
 #include <scene/svm.h>
 #include <scene/bake.h>
 #include <scene/particles.h>
+#include <util/path.h>
 #define ENABLE_CYCLES_LOGGING
 #ifdef ENABLE_CYCLES_LOGGING
 #define GLOG_NO_ABBREVIATED_SEVERITIES
 #include <glog/logging.h>
 #endif
 #include <util_image_buffer.hpp>
+
+#ifdef _WIN32
+#include <Shlobj.h>
+#endif
+
 #pragma optimize("",off)
 
 static std::optional<std::string> KERNEL_PATH {};
 void unirender::Scene::SetKernelPath(const std::string &kernelPath) {KERNEL_PATH = kernelPath;}
+int cycles_standalone_test(int argc, const char **argv,bool initPaths);
 static void init_cycles()
 {
 	static auto isInitialized = false;
@@ -54,26 +61,66 @@ static void init_cycles()
 		return;
 	isInitialized = true;
 
-	std::string kernelPath;
+	std::string cyclesPath;
 	if(KERNEL_PATH.has_value())
-		kernelPath = *KERNEL_PATH;
+		cyclesPath = *KERNEL_PATH;
 	else
-		kernelPath = util::get_program_path();
-
-	// ccl::path_init(kernelPath,kernelPath);
+		cyclesPath = util::get_program_path();
+	
+	for(auto &c : cyclesPath)
+	{
+		if(c == '\\')
+			c = '/';
+	}
+	auto kernelPath = cyclesPath;
+	ccl::path_init(kernelPath,kernelPath);
 
 	util::set_env_variable("CYCLES_KERNEL_PATH",kernelPath);
 	util::set_env_variable("CYCLES_SHADER_PATH",kernelPath);
+
+	std::optional<std::string> optixPath {};
+#ifdef _WIN32
+	TCHAR szPath[MAX_PATH];
+	if(SUCCEEDED(SHGetFolderPath(NULL, CSIDL_COMMON_APPDATA, NULL, 0, szPath)))
+	{
+		std::string path = szPath;
+		path += "/NVIDIA Corporation/";
+		std::vector<std::string> dirs;
+		FileManager::FindSystemFiles((path +"OptiX SDK*").c_str(),nullptr,&dirs);
+		if(!dirs.empty())
+		{
+			std::sort(dirs.begin(),dirs.end());
+			auto dir = dirs.back(); // Presumably the latest version of the SDK
+			optixPath = path +dir;
+			for(auto &c : *optixPath)
+			{
+				if(c == '\\')
+					c = '/';
+			}
+		}
+	}
+#endif
+
+	if(optixPath.has_value())
+	{
+		std::cout<<"Found Optix SDK: "<<*optixPath<<std::endl;
+		util::set_env_variable("OPTIX_ROOT_DIR",*optixPath);
+		// Note: The above should work, but for some reason it doesn't in some cases?
+		// We'll use putenv as well, just to be sure.
+		putenv(("OPTIX_ROOT_DIR=" +*optixPath).c_str());
+	}
+	else
+		std::cout<<"Could not find Optix SDK! Dynamic Optix kernel building will be disabled!"<<std::endl;
 #ifdef ENABLE_CYCLES_LOGGING
 	// ccl::util_logging_init("util_raytracing");
 	// ccl::util_logging_verbosity_set(2);
 	// ccl::util_logging_start();
 	google::InitGoogleLogging("util_raytracing");
-	google::SetLogDestination(google::GLOG_INFO,(kernelPath +"/log/info.log").c_str());
-	google::SetLogDestination(google::GLOG_WARNING,(kernelPath +"/log/warning.log").c_str());
-	google::SetLogDestination(google::GLOG_ERROR,(kernelPath +"/log/error.log").c_str());
-	google::SetLogDestination(google::GLOG_FATAL,(kernelPath +"/log/fatal.log").c_str());
-	FLAGS_log_dir = kernelPath +"/log";
+	google::SetLogDestination(google::GLOG_INFO,(cyclesPath +"/log/info.log").c_str());
+	google::SetLogDestination(google::GLOG_WARNING,(cyclesPath +"/log/warning.log").c_str());
+	google::SetLogDestination(google::GLOG_ERROR,(cyclesPath +"/log/error.log").c_str());
+	google::SetLogDestination(google::GLOG_FATAL,(cyclesPath +"/log/fatal.log").c_str());
+	FLAGS_log_dir = cyclesPath +"/log";
 	//FLAGS_logtostderr = true;
 	//FLAGS_alsologtostderr = true; // Doesn't seem to work properly?
 	//FLAGS_stderrthreshold = google::GLOG_WARNING|google::GLOG_ERROR|google::GLOG_INFO|google::GLOG_FATAL;
@@ -240,30 +287,39 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 	return sessionParams;
 }
 
+// Hip is not yet fully implemented in Cycles X, so it's currently disabled (state: 22-02-03)
+// #define ENABLE_AMD_HIP
 std::optional<ccl::DeviceInfo> unirender::cycles::Renderer::InitializeDevice(const unirender::Scene &scene)
 {
 	init_cycles();
 
 	auto cclDeviceType = ccl::DeviceType::DEVICE_CPU;
+	constexpr std::array<ccl::DeviceType,4> gpuDeviceTypes = {
+		// Order represents order of preference!
+		ccl::DeviceType::DEVICE_OPTIX,
+		ccl::DeviceType::DEVICE_CUDA,
+#ifdef ENABLE_AMD_HIP
+		ccl::DeviceType::DEVICE_HIP,
+#endif
+		ccl::DeviceType::DEVICE_MULTI // TODO: What's this one exactly?
+	};
+	auto devices = ccl::DeviceTypeMask::DEVICE_MASK_CUDA | ccl::DeviceTypeMask::DEVICE_MASK_OPTIX | ccl::DeviceTypeMask::DEVICE_MASK_CPU
+#ifdef ENABLE_AMD_HIP
+		 | ccl::DeviceTypeMask::DEVICE_MASK_HIP
+#endif
+		;
 	auto &createInfo = scene.GetCreateInfo();
 	switch(createInfo.deviceType)
 	{
 	case unirender::Scene::DeviceType::GPU:
 	{
-		if(is_device_type_available(ccl::DeviceType::DEVICE_OPTIX))
+		for(auto devType : gpuDeviceTypes)
 		{
-			cclDeviceType = ccl::DeviceType::DEVICE_OPTIX;
-			break;
-		}
-		if(is_device_type_available(ccl::DeviceType::DEVICE_CUDA))
-		{
-			cclDeviceType = ccl::DeviceType::DEVICE_CUDA;
-			break;
-		}
-		if(is_device_type_available(ccl::DeviceType::DEVICE_MULTI))
-		{
-			cclDeviceType = ccl::DeviceType::DEVICE_MULTI;
-			break;
+			if(is_device_type_available(devType))
+			{
+				cclDeviceType = devType;
+				goto endLoop;
+			}
 		}
 		// No break is intended!
 	}
@@ -273,8 +329,11 @@ std::optional<ccl::DeviceInfo> unirender::cycles::Renderer::InitializeDevice(con
 	}
 	static_assert(umath::to_integral(unirender::Scene::DeviceType::Count) == 2);
 
+endLoop:
+	;
+
 	std::optional<ccl::DeviceInfo> device = {};
-	for(auto &devInfo : ccl::Device::available_devices(ccl::DeviceTypeMask::DEVICE_MASK_CUDA | ccl::DeviceTypeMask::DEVICE_MASK_OPTIX | ccl::DeviceTypeMask::DEVICE_MASK_CPU))
+	for(auto &devInfo : ccl::Device::available_devices(devices))
 	{
 		if(devInfo.type == cclDeviceType)
 		{
@@ -303,7 +362,7 @@ void unirender::cycles::Renderer::InitializeSession(unirender::Scene &scene,cons
 	auto sessionParams = GetSessionParameters(scene,devInfo);
 	m_cclSession = std::make_unique<ccl::Session>(sessionParams,sceneParams);
 
-	auto *cclScene = new ccl::Scene{sceneParams,m_cclSession->device}; // Object will be removed automatically by cycles
+	auto *cclScene = m_cclSession->scene; // new ccl::Scene{sceneParams,m_cclSession->device}; // Object will be removed automatically by cycles
 	cclScene->params.bvh_type = ccl::BVHType::BVH_TYPE_STATIC;
 	m_cclScene = cclScene;
 
@@ -759,89 +818,6 @@ void unirender::cycles::Renderer::Wait()
 		m_cclSession->wait();
 }
 
-std::shared_ptr<uimg::ImageBuffer> unirender::cycles::Renderer::FinalizeCyclesScene()
-{
-	auto *driver = GetOutputDriver();
-	assert(driver);
-	return driver->GetImageBuffer(OUTPUT_COLOR);
-#if 0
-	// Note: We want the HDR output values from cycles which haven't been tonemapped yet, but Cycles
-	// makes this impossible to do, so we'll have to use this work-around.
-	class SessionWrapper
-		: ccl::Session
-	{
-	public:
-		void Finalize(bool hdr,bool progressive)
-		{
-			// This part is the same code as the respective part in Session::~Session()
-			if (session_thread) {
-				/* wait for session thread to end */
-				progress.set_cancel("Exiting");
-
-				gpu_need_display_buffer_update = false;
-				gpu_need_display_buffer_update_cond.notify_all();
-
-				{
-					ccl::thread_scoped_lock pause_lock(pause_mutex);
-					pause = false;
-				}
-				pause_cond.notify_all();
-
-				wait();
-			}
-			//
-
-			if(progressive == false)
-			{
-				/* tonemap and write out image if requested */
-				delete display;
-
-				display = new ccl::DisplayBuffer(device, hdr);
-				display->reset(buffers->params);
-				copy_to_display_buffer(params.samples);
-			}
-		}
-	};
-	auto &session = reinterpret_cast<SessionWrapper&>(*m_cclSession);
-	auto stateFlags = m_scene->GetStateFlags();
-	auto outputWithHDR = umath::is_flag_set(stateFlags,Scene::StateFlags::OutputResultWithHDRColors);
-	auto &createInfo = m_scene->GetCreateInfo();
-	auto &sceneInfo = m_scene->GetSceneInfo();
-	session.Finalize(outputWithHDR,createInfo.progressive);
-
-	std::shared_ptr<uimg::ImageBuffer> imgBuffer = nullptr;
-	if(createInfo.progressive == false)
-	{
-		auto w = m_cclSession->display->draw_width;
-		auto h = m_cclSession->display->draw_height;
-		if(outputWithHDR)
-		{
-			auto *pixels = m_cclSession->display->rgba_half.copy_from_device(0, w, h);
-			imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::Format::RGBA_HDR,false);
-		}
-		else
-		{
-			if(sceneInfo.exposure == 1.f)
-			{
-				auto *pixels = m_cclSession->display->rgba_byte.copy_from_device(0, w, h);
-				imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::Format::RGBA_LDR,false);
-			}
-			else
-			{
-				auto *pixels = m_cclSession->display->rgba_half.copy_from_device(0, w, h);
-				imgBuffer = uimg::ImageBuffer::Create(pixels,w,h,uimg::Format::RGBA_HDR,false);
-				imgBuffer->ApplyExposure(sceneInfo.exposure);
-				imgBuffer->Convert(uimg::Format::RGBA_LDR);
-			}
-		}
-	}
-	else
-		imgBuffer = m_tileManager.UpdateFinalImage()->Copy();
-	return imgBuffer;
-#endif
-	return nullptr;
-}
-
 void unirender::cycles::Renderer::ApplyPostProcessing(uimg::ImageBuffer &imgBuffer,unirender::Scene::RenderMode renderMode)
 {
 	// For some reason the image is flipped horizontally when rendering an image,
@@ -1151,9 +1127,6 @@ ccl::Shader *unirender::cycles::Renderer::AddDebugShader()
 	glossyNode->name = ccl::ustring{"floor_closure2"};
 	glossyNode->set(*find_type_input(*glossyNode,"roughness"),0.2f);
 	glossyNode->set(*find_type_input(*glossyNode,"distribution"),"beckmann");
-	//snode->set_roughness(0.2f);
-	//snode->set_distribution(ccl::ClosureType::CLOSURE_BSDF_MICROFACET_BECKMANN_ID);
-	//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
 	graph->add(glossyNode);
 
 	const ccl::NodeType *nodeTypeCheckerTex = ccl::NodeType::find(ccl::ustring{"checker_texture"});
@@ -1162,9 +1135,6 @@ ccl::Shader *unirender::cycles::Renderer::AddDebugShader()
 	checkerNode->name = ccl::ustring{"checker2"};
 	checkerNode->set(*find_type_input(*checkerNode,"color1"),ccl::float3{0.8f,0.8f,0.8f});
 	checkerNode->set(*find_type_input(*checkerNode,"color2"),ccl::float3{1.f,0.1f,0.1f});
-	//snode->set_color1({0.8f,0.8f,0.8f});
-	//snode->set_color2({1.f,0.1f,0.1f});
-	//snode->set_sky_type(ccl::NodeSkyType::NODE_SKY_HOSEK);
 	graph->add(checkerNode);
 		
 	graph->connect( find_output_socket(*checkerNode,"color"),find_input_socket(*glossyNode,"color"));
@@ -1205,21 +1175,30 @@ void unirender::cycles::Renderer::InitializeDebugScene(const std::string &fileNa
 		opts.output_filepath, opts.output_pass, session_print));
 	}
 
-	if (opts.session_params.background && !opts.quiet)
-		opts.session->progress.set_update_callback([&opts]() {session_print_status(opts);});
+	opts.session->progress.set_update_callback([this]() {std::cout<<"Progress: "<<m_cclSession->progress.get_progress()<<","<<m_cclSession->progress.get_cancel_message()<<","<<m_cclSession->progress.get_error_message()<<std::endl;});
 	  
 	/* add pass for output. */
 	ccl::Pass *pass = opts.scene->create_node<ccl::Pass>();
 	pass->set_name(ccl::ustring(opts.output_pass.c_str()));
 	pass->set_type(ccl::PASS_COMBINED);
 
+	auto useOptix = false;
+	if(useOptix)
+	{
+		using namespace ccl;
+		auto devices = ccl::Device::available_devices(DEVICE_MASK(ccl::DeviceType::DEVICE_OPTIX));
+		opts.session_params.device = devices.front();
+	}
+	opts.session_params.use_auto_tile = false;
+	opts.session_params.tile_size = 0;
+	opts.session_params.background = true;
 	opts.session->reset(opts.session_params, session_buffer_params(opts));
 	opts.session->start();
 
-	while(opts.session->progress.get_progress() < 1.f)
-		;
+	opts.session->wait();
+
 	opts.session = nullptr;
-	m_cclSession  =nullptr;
+	m_cclSession = nullptr;
 }
 
 void unirender::cycles::Renderer::PopulateDebugScene()
@@ -1241,21 +1220,84 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	if(devInfo.has_value() == false)
 		return false;
 
-	AddOutput(OUTPUT_COLOR);
-	if(m_scene->ShouldDenoise())
+	auto apiData = GetApiData();
+	auto udmDebugStandalone = apiData.GetFromPath("cycles/debug/debugStandalone");
+	if(udmDebugStandalone)
 	{
+		std::string xmlFile;
+		udmDebugStandalone["xmlFile"](xmlFile);
+
+		std::string outputFile;
+		udmDebugStandalone["outputFile"](outputFile);
+
+		uint32_t samples = 20;
+		udmDebugStandalone["samples"](samples);
+
+		std::string deviceName = "CPU";
+		udmDebugStandalone["device"](deviceName);
+
+		std::cout<<"Selected device: "<<deviceName<<std::endl;
+		auto strSamples = std::to_string(samples);
+		const char *args[] = {
+			"",
+			xmlFile.c_str(),
+			"--output",
+			outputFile.c_str(),
+			"--samples",
+			strSamples.c_str(),
+			"--device",
+			deviceName.c_str(),
+			"--background"
+		}; 
+		cycles_standalone_test(9,args,false);
+		return false;
+	}
+
+	switch(scene.GetRenderMode())
+	{
+	case unirender::Scene::RenderMode::SceneAlbedo:
 		AddOutput(OUTPUT_ALBEDO);
+		break;
+	case unirender::Scene::RenderMode::SceneNormals:
 		AddOutput(OUTPUT_NORMAL);
+		break;
+	case unirender::Scene::RenderMode::SceneDepth:
+		AddOutput(OUTPUT_DEPTH);
+		break;
+	case unirender::Scene::RenderMode::BakeAmbientOcclusion:
+	case unirender::Scene::RenderMode::BakeNormals:
+	case unirender::Scene::RenderMode::BakeDiffuseLighting:
+		AddOutput(OUTPUT_COLOR);
+		break;
+	case unirender::Scene::RenderMode::RenderImage:
+	{
+		AddOutput(OUTPUT_COLOR);
+		if(m_scene->ShouldDenoise())
+		{
+			AddOutput(OUTPUT_ALBEDO);
+			AddOutput(OUTPUT_NORMAL);
+		}
+		break;
+	}
+	default:
+		return false;
 	}
 	InitializeSession(scene,*devInfo);
 	auto &createInfo = scene.GetCreateInfo();
 	auto bufferParams = GetBufferParameters();
 
-	m_cclSession->scene = m_cclScene;
+	static auto optixDenoiseTest = false;
+	if(optixDenoiseTest)
+	{
+		m_cclScene->integrator->set_use_denoise(true);
+		m_cclScene->integrator->set_denoiser_type(ccl::DenoiserType::DENOISER_OPTIX);
+	}
 
-	auto apiData = GetApiData();
+	// m_cclSession->scene = m_cclScene;
+
+	apiData = GetApiData();
 	auto renderDebugScene = false;
-	auto udmDebugScene = apiData.GetFromPath("cycles/debug/debug_scene");
+	auto udmDebugScene = apiData.GetFromPath("cycles/debug/debugScene");
 	udmDebugScene["enabled"](renderDebugScene);
 	if(renderDebugScene)
 	{
@@ -1357,7 +1399,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	}
 
 	auto &sceneInfo = m_scene->GetSceneInfo();
-	if(createInfo.progressive)
+	if(createInfo.progressive && GetTileSize() > 0)
 	{
 		auto w = m_cclScene->camera->get_full_width();
 		auto h = m_cclScene->camera->get_full_height();
@@ -1394,6 +1436,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	m_cclSession->set_output_driver(std::move(outputDriver));
 
 	//
+
 #if 0
 	{
 		Options opts {};
@@ -1821,6 +1864,9 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 		break;
 	}
 	case ImageRenderStage::Lighting:
+	case ImageRenderStage::SceneAlbedo:
+	case ImageRenderStage::SceneNormals:
+	case ImageRenderStage::SceneDepth:
 	{
 		if(m_progressiveRefine)
 			m_progressiveRunning = true;
@@ -1828,7 +1874,6 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			validate_session(*m_cclScene);
 			m_cclSession->start();
 
-			// Render image with lighting
 			auto progressMultiplier = (m_scene->GetDenoiseMode() == Scene::DenoiseMode::Detailed) ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
 				if(m_progressiveRefine == false)
@@ -1838,8 +1883,23 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					std::unique_lock<std::mutex> lock {m_progressiveMutex};
 					m_progressiveCondition.wait(lock);
 				}
-				auto &resultImageBuffer = GetResultImageBuffer(OUTPUT_COLOR,eyeStage);
-				resultImageBuffer = FinalizeCyclesScene();
+
+				auto &resultImgBuf = GetResultImageBuffer(OUTPUT_COLOR);
+				switch(stage)
+				{
+				case ImageRenderStage::SceneAlbedo:
+					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_ALBEDO);
+					break;
+				case ImageRenderStage::SceneNormals:
+					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
+					break;
+				case ImageRenderStage::SceneDepth:
+					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_DEPTH);
+					break;
+				default:
+					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
+					break;
+				}
 				// ApplyPostProcessing(*resultImageBuffer,m_renderMode);
 
 				if(UpdateStereoEye(worker,stage,eyeStage))
@@ -1848,7 +1908,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					return RenderStageResult::Continue;
 				}
 
-				if(m_scene->ShouldDenoise() == false)
+				if(stage != ImageRenderStage::Lighting || m_scene->ShouldDenoise() == false)
 					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
 
 				auto &albedoImageBuffer = GetResultImageBuffer(OUTPUT_ALBEDO,eyeStage);
@@ -1864,7 +1924,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				{
 					auto *imgBuf = FindResultImageBuffer(debugPass,eyeStage);
 					if(imgBuf)
-						resultImageBuffer = imgBuf->Copy(uimg::Format::RGBA_FLOAT);
+						GetResultImageBuffer(OUTPUT_COLOR) = imgBuf->Copy(uimg::Format::RGBA_FLOAT);
 					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
 				}
 
@@ -1886,7 +1946,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			WaitForRenderStage(worker,0.95f,0.025f,[this,&worker,eyeStage,stage]() mutable -> RenderStageResult {
 				m_cclSession->wait();
 				auto &albedoImageBuffer = GetResultImageBuffer(OUTPUT_ALBEDO,eyeStage);
-				albedoImageBuffer = FinalizeCyclesScene();
+				albedoImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_ALBEDO);
 				// ApplyPostProcessing(*albedoImageBuffer,m_renderMode);
 
 				if(UpdateStereoEye(worker,stage,eyeStage))
@@ -1911,7 +1971,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			WaitForRenderStage(worker,0.975f,0.025f,[this,&worker,eyeStage,stage]() mutable -> RenderStageResult {
 				m_cclSession->wait();
 				auto &normalImageBuffer = GetResultImageBuffer(OUTPUT_NORMAL,eyeStage);
-				normalImageBuffer = FinalizeCyclesScene();
+				normalImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
 				// ApplyPostProcessing(*normalImageBuffer,m_renderMode);
 
 				if(UpdateStereoEye(worker,stage,eyeStage))
@@ -1921,38 +1981,6 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			});
 		});
 		worker.Start();
-		break;
-	}
-	case ImageRenderStage::SceneAlbedo:
-	case ImageRenderStage::SceneNormals:
-	case ImageRenderStage::SceneDepth:
-	{
-		ReloadProgressiveRender();
-		if(eyeStage != StereoEye::Right)
-		{
-			if(stage == ImageRenderStage::SceneAlbedo)
-				InitializeAlbedoPass(true);
-			else if(stage == ImageRenderStage::SceneNormals)
-				InitializeNormalPass(true);
-		}
-		worker.AddThread([this,&worker,eyeStage,stage]() {
-			validate_session(*m_cclScene);
-			m_cclSession->start();
-			WaitForRenderStage(worker,0.f,1.f,[this,&worker,eyeStage,stage]() mutable -> RenderStageResult {
-				m_cclSession->wait();
-				auto &resultImageBuffer = GetResultImageBuffer(OUTPUT_COLOR,eyeStage);
-				resultImageBuffer = FinalizeCyclesScene();
-				// ApplyPostProcessing(*resultImageBuffer,m_renderMode);
-
-				if(UpdateStereoEye(worker,stage,eyeStage))
-				{
-					worker.Start(); // Initial stage for the left eye is triggered by the user, but we have to start it manually for the right eye
-					return RenderStageResult::Continue;
-				}
-
-				return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
-			});
-		});
 		break;
 	}
 	}
@@ -2435,7 +2463,7 @@ void unirender::cycles::Renderer::FinalizeAndCloseCyclesScene()
 {
 	auto stateFlags = m_scene->GetStateFlags();
 	if(m_cclSession && m_scene->IsRenderSceneMode(m_scene->GetRenderMode()) && m_renderingStarted)
-		GetResultImageBuffer(OUTPUT_COLOR) = FinalizeCyclesScene();
+		GetResultImageBuffer(OUTPUT_COLOR) = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
 	CloseCyclesScene();
 }
 
@@ -2526,19 +2554,28 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 		{
 			auto *pass = scene.create_node<ccl::Pass>();
 			pass->set_name(ccl::ustring{OUTPUT_ALBEDO});
-			pass->set_type(ccl::PASS_DENOISING_ALBEDO);
+			if(m_scene->GetRenderMode() == unirender::Scene::RenderMode::SceneAlbedo)
+				pass->set_type(ccl::PASS_DIFFUSE_COLOR);
+			else
+				pass->set_type(ccl::PASS_DENOISING_ALBEDO);
 		}
 		else if(pair.first == OUTPUT_NORMAL)
 		{
 			auto *pass = scene.create_node<ccl::Pass>();
 			pass->set_name(ccl::ustring{OUTPUT_NORMAL});
-			pass->set_type(ccl::PASS_DENOISING_NORMAL);
+			if(m_scene->GetRenderMode() == unirender::Scene::RenderMode::SceneNormals)
+				pass->set_type(ccl::PASS_NORMAL);
+			else
+				pass->set_type(ccl::PASS_DENOISING_NORMAL);
 		}
 		else if(pair.first == OUTPUT_DEPTH)
 		{
 			auto *pass = scene.create_node<ccl::Pass>();
 			pass->set_name(ccl::ustring{OUTPUT_DEPTH});
-			pass->set_type(ccl::PASS_DENOISING_DEPTH);
+			if(m_scene->GetRenderMode() == unirender::Scene::RenderMode::SceneDepth)
+				pass->set_type(ccl::PASS_DEPTH);
+			else
+				pass->set_type(ccl::PASS_DENOISING_DEPTH);
 		}
 	}
 

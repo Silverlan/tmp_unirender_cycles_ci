@@ -89,7 +89,6 @@ namespace unirender::cycles
 		void FinalizeAndCloseCyclesScene();
 		void CloseCyclesScene();
 		void ApplyPostProcessing(uimg::ImageBuffer &imgBuffer,unirender::Scene::RenderMode renderMode);
-		std::shared_ptr<uimg::ImageBuffer> FinalizeCyclesScene();
 		void InitializeAlbedoPass(bool reloadShaders);
 		void InitializeNormalPass(bool reloadShaders);
 		void InitializePassShaders(const std::function<std::shared_ptr<GroupNodeDesc>(const Shader&)> &fGetPassDesc);

@@ -35,13 +35,13 @@ namespace unirender::cycles
 	{
 	public:
 		DisplayDriver(uint32_t width,uint32_t height);
-		virtual void next_tile_begin() override;
 		virtual bool update_begin(const Params &params, int width, int height) override;
 		virtual void update_end() override;
 		virtual ccl::half4 *map_texture_buffer() override;
 		virtual void unmap_texture_buffer() override;
 		virtual void clear() override;
 		virtual void draw(const Params &params) override;
+		virtual void next_tile_begin() override {};
 
 	};
 

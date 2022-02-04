@@ -31,10 +31,6 @@ std::shared_ptr<uimg::ImageBuffer> unirender::cycles::BaseDriver::GetImageBuffer
 unirender::cycles::DisplayDriver::DisplayDriver(uint32_t width,uint32_t height)
 	: BaseDriver{{{"combined",uimg::Format::RGBA16}},width,height}
 {}
-void unirender::cycles::DisplayDriver::next_tile_begin()
-{
-
-}
 bool unirender::cycles::DisplayDriver::update_begin(const Params &params, int width, int height)
 {
 	return true;

@@ -139,6 +139,7 @@ namespace unirender::cycles
 		bool m_skyInitialized = false;
 		bool m_renderingStarted = false;
 		bool m_progressiveRefine = false;
+		bool m_nativeDenoising = false;
 		Scene::RenderMode m_renderMode = Scene::RenderMode::RenderImage;
 	};
 };

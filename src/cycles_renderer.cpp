@@ -1253,6 +1253,40 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		return false;
 	}
 
+	m_nativeDenoising = false;
+	auto udmDebug = apiData.GetFromPath("cycles/debug");
+	udmDebug["nativeDenoising"](m_nativeDenoising);
+	
+	auto denoiserType = ccl::DenoiserType::DENOISER_NONE;
+	if(!m_nativeDenoising)
+	{
+		auto denoiseMode = m_scene->GetDenoiseMode();
+		std::vector<ccl::DenoiserType> denoisePreferenceOrder;
+		if(denoiseMode == Scene::DenoiseMode::AutoFast || denoiseMode == Scene::DenoiseMode::AutoDetailed || denoiseMode == Scene::DenoiseMode::Optix)
+		{
+			denoisePreferenceOrder.push_back(ccl::DenoiserType::DENOISER_OPTIX);
+			denoisePreferenceOrder.push_back(ccl::DenoiserType::DENOISER_OPENIMAGEDENOISE);
+		}
+		else if(denoiseMode == Scene::DenoiseMode::OpenImage)
+		{
+			denoisePreferenceOrder.push_back(ccl::DenoiserType::DENOISER_OPENIMAGEDENOISE);
+			denoisePreferenceOrder.push_back(ccl::DenoiserType::DENOISER_OPTIX);
+		}
+	
+		auto availableDenoisers = devInfo->denoisers;
+		for(auto type : denoisePreferenceOrder)
+		{
+			if((availableDenoisers &type) != 0)
+			{
+				denoiserType = type;
+				break;
+			}
+		}
+
+		if(denoiserType == ccl::DenoiserType::DENOISER_NONE && denoiseMode != Scene::DenoiseMode::None)
+			m_nativeDenoising = true; // No Cycles denoising available; Fall back to native denoising
+	}
+
 	switch(scene.GetRenderMode())
 	{
 	case unirender::Scene::RenderMode::SceneAlbedo:
@@ -1272,7 +1306,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	case unirender::Scene::RenderMode::RenderImage:
 	{
 		AddOutput(OUTPUT_COLOR);
-		if(m_scene->ShouldDenoise())
+		if(m_nativeDenoising)
 		{
 			AddOutput(OUTPUT_ALBEDO);
 			AddOutput(OUTPUT_NORMAL);
@@ -1282,18 +1316,18 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	default:
 		return false;
 	}
+
 	InitializeSession(scene,*devInfo);
 	auto &createInfo = scene.GetCreateInfo();
 	auto bufferParams = GetBufferParameters();
 
-	static auto optixDenoiseTest = false;
-	if(optixDenoiseTest)
+	if(denoiserType == ccl::DenoiserType::DENOISER_NONE)
+		m_cclScene->integrator->set_use_denoise(false);
+	else
 	{
 		m_cclScene->integrator->set_use_denoise(true);
-		m_cclScene->integrator->set_denoiser_type(ccl::DenoiserType::DENOISER_OPTIX);
+		m_cclScene->integrator->set_denoiser_type(denoiserType);
 	}
-
-	// m_cclSession->scene = m_cclScene;
 
 	apiData = GetApiData();
 	auto renderDebugScene = false;
@@ -1874,7 +1908,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			validate_session(*m_cclScene);
 			m_cclSession->start();
 
-			auto progressMultiplier = (m_scene->GetDenoiseMode() == Scene::DenoiseMode::Detailed) ? 0.95f : 1.f;
+			auto progressMultiplier = (m_scene->GetDenoiseMode() == Scene::DenoiseMode::AutoDetailed) ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
 				if(m_progressiveRefine == false)
 					m_cclSession->wait();
@@ -1908,7 +1942,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					return RenderStageResult::Continue;
 				}
 
-				if(stage != ImageRenderStage::Lighting || m_scene->ShouldDenoise() == false)
+				if(stage != ImageRenderStage::Lighting || !m_nativeDenoising)
 					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
 
 				auto &albedoImageBuffer = GetResultImageBuffer(OUTPUT_ALBEDO,eyeStage);

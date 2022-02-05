@@ -28,6 +28,16 @@ namespace unirender::cycles
 		static std::shared_ptr<Renderer> Create(const unirender::Scene &scene,Flags flags);
 		static constexpr ccl::AttributeStandard ALPHA_ATTRIBUTE_TYPE = ccl::AttributeStandard::ATTR_STD_POINTINESS;
 
+		enum class StateFlags : uint32_t
+		{
+			None = 0u,
+			SkyInitialized = 1u,
+			RenderingStarted = SkyInitialized<<1u,
+			ProgressiveRefine = RenderingStarted<<1u,
+			NativeDenoising = ProgressiveRefine<<1u,
+			SessionWasStarted = NativeDenoising<<1u
+		};
+
 		static Vector3 ToPragmaPosition(const ccl::float3 &pos);
 		static ccl::float3 ToCyclesVector(const Vector3 &v);
 		static ccl::float3 ToCyclesPosition(const Vector3 &pos);
@@ -50,6 +60,9 @@ namespace unirender::cycles
 		virtual bool ShouldUseProgressiveFloatFormat() const override {return false;}
 		virtual std::optional<std::string> SaveRenderPreview(const std::string &path,std::string &outErr) const override;
 		virtual util::ParallelJob<std::shared_ptr<uimg::ImageBuffer>> StartRender() override;
+
+		virtual bool BeginSceneEdit() const override;
+		virtual bool EndSceneEdit() const override;
 
 		ccl::Object *FindCclObject(const Object &obj);
 		const ccl::Object *FindCclObject(const Object &obj) const {return const_cast<Renderer*>(this)->FindCclObject(obj);}
@@ -121,7 +134,7 @@ namespace unirender::cycles
 		ccl::SessionParams GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const;
 		ccl::BufferParams GetBufferParameters() const;
 		void SyncLight(unirender::Scene &scene,const unirender::Light &light);
-		void SyncCamera(const unirender::Camera &cam);
+		void SyncCamera(const unirender::Camera &cam,bool update=false);
 		void SyncObject(const unirender::Object &obj);
 		void SyncMesh(const unirender::Mesh &mesh);
 		void InitializeSession(unirender::Scene &scene,const ccl::DeviceInfo &devInfo);
@@ -138,11 +151,7 @@ namespace unirender::cycles
 		std::unordered_map<const Mesh*,ccl::Mesh*> m_meshToCcclMesh;
 		std::unordered_map<const Light*,ccl::Light*> m_lightToCclLight;
 		std::atomic<uint32_t> m_restartState = 0;
-		bool m_skyInitialized = false;
-		bool m_renderingStarted = false;
-		bool m_progressiveRefine = false;
-		bool m_nativeDenoising = false;
-		bool m_sessionWasStarted = false;
+		StateFlags m_stateFlags = StateFlags::None;
 
 		ccl::SessionParams m_sessionParams;
 		ccl::BufferParams m_bufferParams;
@@ -150,5 +159,6 @@ namespace unirender::cycles
 		Scene::RenderMode m_renderMode = Scene::RenderMode::RenderImage;
 	};
 };
+REGISTER_BASIC_BITWISE_OPERATORS(unirender::cycles::Renderer::StateFlags)
 
 #endif

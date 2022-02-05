@@ -198,13 +198,11 @@ float unirender::cycles::Renderer::ToCyclesLength(float len)
 
 std::shared_ptr<unirender::cycles::Renderer> unirender::cycles::Renderer::Create(const unirender::Scene &scene,Flags flags)
 {
-	if(umath::is_flag_set(flags,Flags::EnableLiveEditing))
-		return nullptr; // Not supported for Cycles
 	auto renderer = std::shared_ptr<Renderer>{new Renderer{scene}};
 	renderer->m_renderMode = scene.GetRenderMode();
 
 	auto &createInfo = scene.GetCreateInfo();
-	renderer->m_progressiveRefine = createInfo.progressiveRefine;
+	umath::set_flag(renderer->m_stateFlags,StateFlags::ProgressiveRefine,createInfo.progressiveRefine);
 	auto &sceneInfo = scene.GetSceneInfo();
 	const_cast<Scene::SceneInfo&>(sceneInfo).exposure = createInfo.exposure; // TODO: This doesn't belong here!
 	return renderer;
@@ -260,7 +258,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 		}
 	}
 
-	if(m_progressiveRefine)
+	if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine))
 		sessionParams.samples = 50'000;
 
 #ifdef ENABLE_TEST_AMBIENT_OCCLUSION
@@ -557,7 +555,7 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	}
 }
 
-void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam)
+void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam,bool update)
 {
 	auto &cclCam = *(*this)->camera;
 
@@ -635,7 +633,9 @@ void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam)
 
 	cclCam.set_matrix(ToCyclesTransform(pose,true));
 	cclCam.compute_auto_viewplane();
-
+	
+	if(update)
+		return;
 	//
 	std::cout<<"Camera settings:"<<std::endl;
 	std::cout<<"Width: "<<cclCam.get_full_width()<<std::endl;
@@ -1215,6 +1215,17 @@ void unirender::cycles::Renderer::PopulateDebugScene()
 	mesh->set_used_shaders(used_shaders);
 }
 
+bool unirender::cycles::Renderer::BeginSceneEdit() const {return true;}
+bool unirender::cycles::Renderer::EndSceneEdit() const
+{
+	const_cast<Renderer*>(this)->SyncCamera(m_scene->GetCamera(),true);
+
+	m_cclScene->camera->need_flags_update = true;
+	m_cclScene->camera->need_device_update = true;
+	m_cclSession->reset(m_sessionParams,m_bufferParams);
+	return true;
+}
+
 bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string &outErr)
 {
 	auto devInfo = InitializeDevice(scene);
@@ -1254,12 +1265,13 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		return false;
 	}
 
-	m_nativeDenoising = false;
+	auto nativeDenoising = false;
 	auto udmDebug = apiData.GetFromPath("cycles/debug");
-	udmDebug["nativeDenoising"](m_nativeDenoising);
+	udmDebug["nativeDenoising"](nativeDenoising);
+	umath::set_flag(m_stateFlags,StateFlags::NativeDenoising,nativeDenoising);
 	
 	auto denoiserType = ccl::DenoiserType::DENOISER_NONE;
-	if(!m_nativeDenoising)
+	if(!umath::is_flag_set(m_stateFlags,StateFlags::NativeDenoising))
 	{
 		auto denoiseMode = m_scene->GetDenoiseMode();
 		std::vector<ccl::DenoiserType> denoisePreferenceOrder;
@@ -1285,7 +1297,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		}
 
 		if(denoiserType == ccl::DenoiserType::DENOISER_NONE && denoiseMode != Scene::DenoiseMode::None)
-			m_nativeDenoising = true; // No Cycles denoising available; Fall back to native denoising
+			umath::set_flag(m_stateFlags,StateFlags::NativeDenoising); // No Cycles denoising available; Fall back to native denoising
 	}
 
 	switch(scene.GetRenderMode())
@@ -1307,7 +1319,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	case unirender::Scene::RenderMode::RenderImage:
 	{
 		AddOutput(OUTPUT_COLOR);
-		if(m_nativeDenoising)
+		if(umath::is_flag_set(m_stateFlags,StateFlags::NativeDenoising))
 		{
 			AddOutput(OUTPUT_ALBEDO);
 			AddOutput(OUTPUT_NORMAL);
@@ -1355,7 +1367,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 
 	if(m_scene->GetSceneInfo().sky.empty() == false)
 		AddSkybox(m_scene->GetSceneInfo().sky);
-	m_renderingStarted = true;
+	umath::set_flag(m_stateFlags,StateFlags::RenderingStarted);
 	
 	auto &mdlCache = m_renderData.modelCache;
 	mdlCache->GenerateData();
@@ -1766,9 +1778,9 @@ std::optional<std::string> unirender::cycles::Renderer::SaveRenderPreview(const 
 
 void unirender::cycles::Renderer::AddSkybox(const std::string &texture)
 {
-	if(m_skyInitialized)
+	if(umath::is_flag_set(m_stateFlags,StateFlags::SkyInitialized))
 		return;
-	m_skyInitialized = true;
+	umath::set_flag(m_stateFlags,StateFlags::SkyInitialized);
 
 	if(m_renderMode == Scene::RenderMode::SceneDepth)
 	{
@@ -1906,13 +1918,13 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 	case ImageRenderStage::SceneNormals:
 	case ImageRenderStage::SceneDepth:
 	{
-		if(m_progressiveRefine)
+		if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine))
 			m_progressiveRunning = true;
 		worker.AddThread([this,&worker,stage,eyeStage]() {
 			validate_session(*m_cclScene);
 
 			InitStereoEye(eyeStage);
-			if(m_sessionWasStarted)
+			if(umath::is_flag_set(m_stateFlags,StateFlags::SessionWasStarted))
 			{
 				//options.session->scene->camera->need_flags_update = true;
 				//options.session->scene->camera->need_device_update = true;
@@ -1922,13 +1934,13 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			}
 			else
 			{
-				m_sessionWasStarted = true;
+				umath::set_flag(m_stateFlags,StateFlags::SessionWasStarted);
 				m_cclSession->start();
 			}
 
-			auto progressMultiplier = m_nativeDenoising ? 0.95f : 1.f;
+			auto progressMultiplier = umath::is_flag_set(m_stateFlags,StateFlags::NativeDenoising) ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
-				if(m_progressiveRefine == false)
+				if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine) == false)
 					m_cclSession->wait();
 				else if(m_progressiveRunning)
 				{
@@ -1960,7 +1972,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					return RenderStageResult::Continue;
 				}
 
-				if(stage != ImageRenderStage::Lighting || !m_nativeDenoising)
+				if(stage != ImageRenderStage::Lighting || !umath::is_flag_set(m_stateFlags,StateFlags::NativeDenoising))
 					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
 
 				auto &albedoImageBuffer = GetResultImageBuffer(OUTPUT_ALBEDO,eyeStage);
@@ -2056,7 +2068,7 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 			m_restartState = 0;
 			continue;
 		}
-		if(m_progressiveRefine && m_progressiveRunning == false)
+		if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine) && m_progressiveRunning == false)
 			break;
 		if(m_cclSession->progress.get_cancel())
 		{
@@ -2130,7 +2142,7 @@ void unirender::cycles::Renderer::ReloadProgressiveRender(bool clearExposure,boo
 	m_tileManager.Reload(waitForPreviousCompletion);
 	if(clearExposure)
 		m_tileManager.SetExposure(1.f);
-	m_progressiveRefine = false;
+	umath::set_flag(m_stateFlags,StateFlags::ProgressiveRefine,false);
 	m_cclSession->progress.reset();
 }
 
@@ -2530,7 +2542,7 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 void unirender::cycles::Renderer::FinalizeAndCloseCyclesScene()
 {
 	auto stateFlags = m_scene->GetStateFlags();
-	if(m_cclSession && m_scene->IsRenderSceneMode(m_scene->GetRenderMode()) && m_renderingStarted)
+	if(m_cclSession && m_scene->IsRenderSceneMode(m_scene->GetRenderMode()) && umath::is_flag_set(m_stateFlags,StateFlags::RenderingStarted))
 		GetResultImageBuffer(OUTPUT_COLOR) = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
 	CloseCyclesScene();
 }

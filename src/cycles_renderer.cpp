@@ -1192,6 +1192,7 @@ void unirender::cycles::Renderer::InitializeDebugScene(const std::string &fileNa
 	opts.session_params.use_auto_tile = false;
 	opts.session_params.tile_size = 0;
 	opts.session_params.background = true;
+
 	opts.session->reset(opts.session_params, session_buffer_params(opts));
 	opts.session->start();
 
@@ -1348,7 +1349,9 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		return false;
 	}
 
-	m_cclSession->reset(m_cclSession->params,bufferParams);
+	m_sessionParams = m_cclSession->params;
+	m_bufferParams = bufferParams;
+	m_cclSession->reset(m_sessionParams,m_bufferParams);
 
 	if(m_scene->GetSceneInfo().sky.empty() == false)
 		AddSkybox(m_scene->GetSceneInfo().sky);
@@ -1427,7 +1430,8 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		ColorTransformProcessorCreateInfo ctpCreateInfo {};
 		ctpCreateInfo.config = createInfo.colorTransform->config;
 		ctpCreateInfo.lookName = createInfo.colorTransform->lookName;
-		m_colorTransformProcessor = create_color_transform_processor(ctpCreateInfo,err);
+		ctpCreateInfo.bitDepth = ColorTransformProcessorCreateInfo::BitDepth::Float16;
+		m_colorTransformProcessor = create_color_transform_processor(ctpCreateInfo,err,0.f,m_scene->GetGamma());
 		if(m_colorTransformProcessor == nullptr)
 			m_scene->HandleError("Unable to initialize color transform processor: " +err);
 	}
@@ -1462,7 +1466,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		else
 			passes.push_back({pair.first,uimg::Format::RGB32});
 	}
-	auto displayDriver = std::make_unique<DisplayDriver>(cam.GetWidth(),cam.GetHeight());
+	auto displayDriver = std::make_unique<DisplayDriver>(m_tileManager,cam.GetWidth(),cam.GetHeight());
 	m_displayDriver = displayDriver.get();
 	auto outputDriver = std::make_unique<OutputDriver>(passes,cam.GetWidth(),cam.GetHeight());
 	m_outputDriver = outputDriver.get();
@@ -1906,9 +1910,23 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			m_progressiveRunning = true;
 		worker.AddThread([this,&worker,stage,eyeStage]() {
 			validate_session(*m_cclScene);
-			m_cclSession->start();
 
-			auto progressMultiplier = (m_scene->GetDenoiseMode() == Scene::DenoiseMode::AutoDetailed) ? 0.95f : 1.f;
+			InitStereoEye(eyeStage);
+			if(m_sessionWasStarted)
+			{
+				//options.session->scene->camera->need_flags_update = true;
+				//options.session->scene->camera->need_device_update = true;
+				//options.session->reset(options.session_params, session_buffer_params());
+				m_cclSession->reset(m_sessionParams,m_bufferParams);
+				m_cclSession->start();
+			}
+			else
+			{
+				m_sessionWasStarted = true;
+				m_cclSession->start();
+			}
+
+			auto progressMultiplier = m_nativeDenoising ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
 				if(m_progressiveRefine == false)
 					m_cclSession->wait();
@@ -1918,7 +1936,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					m_progressiveCondition.wait(lock);
 				}
 
-				auto &resultImgBuf = GetResultImageBuffer(OUTPUT_COLOR);
+				auto &resultImgBuf = GetResultImageBuffer(OUTPUT_COLOR,eyeStage);
 				switch(stage)
 				{
 				case ImageRenderStage::SceneAlbedo:
@@ -1958,7 +1976,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				{
 					auto *imgBuf = FindResultImageBuffer(debugPass,eyeStage);
 					if(imgBuf)
-						GetResultImageBuffer(OUTPUT_COLOR) = imgBuf->Copy(uimg::Format::RGBA_FLOAT);
+						GetResultImageBuffer(OUTPUT_COLOR,eyeStage) = imgBuf->Copy(uimg::Format::RGBA_FLOAT);
 					return StartNextRenderStage(worker,ImageRenderStage::FinalizeImage,eyeStage);
 				}
 
@@ -2067,12 +2085,29 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 		worker.SetStatus(util::JobStatus::Successful);
 }
 
-bool unirender::cycles::Renderer::UpdateStereoEye(unirender::RenderWorker &worker,ImageRenderStage stage,StereoEye &eyeStage)
+void unirender::cycles::Renderer::InitStereoEye(StereoEye eyeStage)
 {
 	if(eyeStage == StereoEye::Left)
 	{
 		// Switch to right eye
 		m_cclScene->camera->set_stereo_eye(ccl::Camera::StereoEye::STEREO_RIGHT);
+		m_cclScene->camera->need_flags_update = true;
+		m_cclScene->camera->need_device_update = true;
+	}
+	else if(eyeStage == StereoEye::Right)
+	{
+		// Switch back to left eye and continue with next stage
+		m_cclScene->camera->set_stereo_eye(ccl::Camera::StereoEye::STEREO_LEFT);
+		m_cclScene->camera->need_flags_update = true;
+		m_cclScene->camera->need_device_update = true;
+	}
+}
+
+bool unirender::cycles::Renderer::UpdateStereoEye(unirender::RenderWorker &worker,ImageRenderStage stage,StereoEye &eyeStage)
+{
+	if(eyeStage == StereoEye::Left)
+	{
+		// Switch to right eye
 		ReloadProgressiveRender(false);
 		StartNextRenderStage(worker,stage,StereoEye::Right);
 		return true;
@@ -2080,7 +2115,6 @@ bool unirender::cycles::Renderer::UpdateStereoEye(unirender::RenderWorker &worke
 	else if(eyeStage == StereoEye::Right)
 	{
 		// Switch back to left eye and continue with next stage
-		m_cclScene->camera->set_stereo_eye(ccl::Camera::StereoEye::STEREO_LEFT);
 		eyeStage = StereoEye::Left;
 	}
 	return false;
@@ -2505,8 +2539,7 @@ void unirender::cycles::Renderer::CloseRenderScene() {CloseCyclesScene();}
 
 void unirender::cycles::Renderer::FinalizeImage(uimg::ImageBuffer &imgBuf,StereoEye eyeStage)
 {
-	if(m_scene->IsProgressive() == false) // If progressive, our tile manager will have already flipped the image
-		imgBuf.Flip(true,true);
+	imgBuf.Flip(true,true);
 }
 
 void unirender::cycles::Renderer::SetupRenderSettings(

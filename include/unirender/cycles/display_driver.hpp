@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace uimg {class ImageBuffer;};
+namespace unirender {class TileManager;};
 namespace unirender::cycles
 {
 	class BaseDriver
@@ -34,7 +35,7 @@ namespace unirender::cycles
 		: public ccl::DisplayDriver,public BaseDriver
 	{
 	public:
-		DisplayDriver(uint32_t width,uint32_t height);
+		DisplayDriver(unirender::TileManager &tileManager,uint32_t width,uint32_t height);
 		virtual bool update_begin(const Params &params, int width, int height) override;
 		virtual void update_end() override;
 		virtual ccl::half4 *map_texture_buffer() override;
@@ -42,7 +43,8 @@ namespace unirender::cycles
 		virtual void clear() override;
 		virtual void draw(const Params &params) override;
 		virtual void next_tile_begin() override {};
-
+	private:
+		unirender::TileManager &m_tileManager;
 	};
 
 	class OutputDriver

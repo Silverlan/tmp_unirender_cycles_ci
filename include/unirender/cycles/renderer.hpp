@@ -47,6 +47,7 @@ namespace unirender::cycles
 		virtual bool Export(const std::string &path) override;
 		virtual void Reset() override;
 		virtual void Restart() override;
+		virtual bool ShouldUseProgressiveFloatFormat() const override {return false;}
 		virtual std::optional<std::string> SaveRenderPreview(const std::string &path,std::string &outErr) const override;
 		virtual util::ParallelJob<std::shared_ptr<uimg::ImageBuffer>> StartRender() override;
 
@@ -100,6 +101,7 @@ namespace unirender::cycles
 		virtual bool UpdateStereoEye(unirender::RenderWorker &worker,unirender::Renderer::ImageRenderStage stage,StereoEye &eyeStage) override;
 		virtual void CloseRenderScene() override;
 		virtual void FinalizeImage(uimg::ImageBuffer &imgBuf,StereoEye eyeStage) override;
+		void InitStereoEye(StereoEye eyeStage);
 		void ReloadProgressiveRender(bool clearExposure=true,bool waitForPreviousCompletion=false);
 		int GetTileSize() const;
 
@@ -140,6 +142,11 @@ namespace unirender::cycles
 		bool m_renderingStarted = false;
 		bool m_progressiveRefine = false;
 		bool m_nativeDenoising = false;
+		bool m_sessionWasStarted = false;
+
+		ccl::SessionParams m_sessionParams;
+		ccl::BufferParams m_bufferParams;
+
 		Scene::RenderMode m_renderMode = Scene::RenderMode::RenderImage;
 	};
 };

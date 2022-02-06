@@ -35,7 +35,8 @@ namespace unirender::cycles
 			RenderingStarted = SkyInitialized<<1u,
 			ProgressiveRefine = RenderingStarted<<1u,
 			NativeDenoising = ProgressiveRefine<<1u,
-			SessionWasStarted = NativeDenoising<<1u
+			SessionWasStarted = NativeDenoising<<1u,
+			ReloadSessionScheduled = SessionWasStarted<<1u
 		};
 
 		static Vector3 ToPragmaPosition(const ccl::float3 &pos);
@@ -61,8 +62,9 @@ namespace unirender::cycles
 		virtual std::optional<std::string> SaveRenderPreview(const std::string &path,std::string &outErr) const override;
 		virtual util::ParallelJob<std::shared_ptr<uimg::ImageBuffer>> StartRender() override;
 
-		virtual bool BeginSceneEdit() const override;
-		virtual bool EndSceneEdit() const override;
+		virtual bool BeginSceneEdit() override;
+		virtual bool EndSceneEdit() override;
+		virtual bool SyncEditedActor(const util::Uuid &uuid) override;
 
 		ccl::Object *FindCclObject(const Object &obj);
 		const ccl::Object *FindCclObject(const Object &obj) const {return const_cast<Renderer*>(this)->FindCclObject(obj);}
@@ -133,7 +135,7 @@ namespace unirender::cycles
 
 		ccl::SessionParams GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const;
 		ccl::BufferParams GetBufferParameters() const;
-		void SyncLight(unirender::Scene &scene,const unirender::Light &light);
+		void SyncLight(unirender::Scene &scene,const unirender::Light &light,bool update=false);
 		void SyncCamera(const unirender::Camera &cam,bool update=false);
 		void SyncObject(const unirender::Object &obj);
 		void SyncMesh(const unirender::Mesh &mesh);
@@ -152,6 +154,8 @@ namespace unirender::cycles
 		std::unordered_map<const Light*,ccl::Light*> m_lightToCclLight;
 		std::atomic<uint32_t> m_restartState = 0;
 		StateFlags m_stateFlags = StateFlags::None;
+		std::mutex m_cancelMutex;
+		bool m_cancelled = false;
 
 		ccl::SessionParams m_sessionParams;
 		ccl::BufferParams m_bufferParams;

@@ -67,6 +67,8 @@ void unirender::cycles::DisplayDriver::unmap_texture_buffer()
 	memcpy(inputTile.data.data(),data,util::size_of_container(inputTile.data));
 	m_tileManager.ApplyPostProcessingForProgressiveTile(inputTile);
 	m_tileManager.AddRenderedTile(std::move(inputTile));
+
+	m_tileWritten = true;
 }
 void unirender::cycles::DisplayDriver::clear()
 {

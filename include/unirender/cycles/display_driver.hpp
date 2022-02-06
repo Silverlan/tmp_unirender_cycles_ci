@@ -43,8 +43,12 @@ namespace unirender::cycles
 		virtual void clear() override;
 		virtual void draw(const Params &params) override;
 		virtual void next_tile_begin() override {};
+
+		void ResetTileWrittenFlag() {m_tileWritten = false;}
+		bool WasTileWritten() const {return m_tileWritten;}
 	private:
 		unirender::TileManager &m_tileManager;
+		std::atomic<bool> m_tileWritten = false;
 	};
 
 	class OutputDriver

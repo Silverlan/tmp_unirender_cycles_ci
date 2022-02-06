@@ -675,11 +675,22 @@ void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam,bool u
 	cclCam.update(&**this);
 }
 
-void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const unirender::Light &light)
+void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const unirender::Light &light,bool update)
 {
-	auto *cclLight = new ccl::Light{}; // Object will be removed automatically by cycles
-	m_cclScene->lights.push_back(cclLight);
-	m_lightToCclLight[&light] = cclLight;
+	ccl::Light *cclLight = nullptr;
+	if(update)
+	{
+		auto it = m_lightToCclLight.find(&light);
+		if(it == m_lightToCclLight.end())
+			return;
+		cclLight = it->second;
+	}
+	else
+	{
+		cclLight = new ccl::Light{}; // Object will be removed automatically by cycles
+		m_cclScene->lights.push_back(cclLight);
+		m_lightToCclLight[&light] = cclLight;
+	}
 	cclLight->set_tfm(ccl::transform_identity());
 	switch(light.GetType())
 	{
@@ -755,14 +766,6 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 	}
 	}
 
-	auto desc = GroupNodeDesc::Create(scene.GetShaderNodeManager());
-	auto &outputNode = desc->AddNode(NODE_OUTPUT);
-	auto &nodeEmission = desc->AddNode(NODE_EMISSION);
-	//nodeEmission->SetInputArgument<float>("strength",watt);
-	//nodeEmission->SetInputArgument<ccl::float3>("color",ccl::float3{1.f,1.f,1.f});
-	desc->Link(nodeEmission.GetOutputSocket("emission"),outputNode.GetInputSocket("surface"));
-	cclLight->set_shader(**CCLShader::Create(*this,*desc));
-
 	auto lightType = (light.GetType() == unirender::Light::Type::Spot) ? util::pragma::LightType::Spot : (light.GetType() == unirender::Light::Type::Directional) ? util::pragma::LightType::Directional : util::pragma::LightType::Point;
 	auto watt = (lightType == util::pragma::LightType::Spot) ? ulighting::cycles::lumen_to_watt_spot(light.GetIntensity(),light.GetColor(),light.GetOuterConeAngle()) :
 		(lightType == util::pragma::LightType::Point) ? ulighting::cycles::lumen_to_watt_point(light.GetIntensity(),light.GetColor()) :
@@ -775,7 +778,8 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 	//static float lightIntensityFactor = 10.f;
 	//watt *= lightIntensityFactor;
 
-	watt *= scene.GetLightIntensityFactor();
+	static auto lightIntensityMultiplier = 200.f;
+	watt *= scene.GetLightIntensityFactor() *lightIntensityMultiplier;
 	auto &color = light.GetColor();
 	cclLight->set_strength(ccl::float3{color.r,color.g,color.b} *watt);
 	cclLight->set_size(ToCyclesLength(light.GetSize()));
@@ -783,12 +787,23 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 
 	cclLight->set_max_bounces(1'024);
 	cclLight->set_map_resolution(2'048);
+	cclLight->tag_update(m_cclScene);
 	// 
 	// Test
 	/*m_light->strength = ccl::float3{0.984539f,1.f,0.75f} *40.f;
 	m_light->size = 0.25f;
 	m_light->max_bounces = 1'024;
 	m_light->type = ccl::LightType::LIGHT_POINT;*/
+
+	if(update)
+		return;
+	auto desc = GroupNodeDesc::Create(scene.GetShaderNodeManager());
+	auto &outputNode = desc->AddNode(NODE_OUTPUT);
+	auto &nodeEmission = desc->AddNode(NODE_EMISSION);
+	//nodeEmission->SetInputArgument<float>("strength",watt);
+	//nodeEmission->SetInputArgument<ccl::float3>("color",ccl::float3{1.f,1.f,1.f});
+	desc->Link(nodeEmission.GetOutputSocket("emission"),outputNode.GetInputSocket("surface"));
+	cclLight->set_shader(**CCLShader::Create(*this,*desc));
 }
 
 ccl::BufferParams unirender::cycles::Renderer::GetBufferParameters() const
@@ -1215,14 +1230,20 @@ void unirender::cycles::Renderer::PopulateDebugScene()
 	mesh->set_used_shaders(used_shaders);
 }
 
-bool unirender::cycles::Renderer::BeginSceneEdit() const {return true;}
-bool unirender::cycles::Renderer::EndSceneEdit() const
+bool unirender::cycles::Renderer::BeginSceneEdit() {return true;}
+bool unirender::cycles::Renderer::EndSceneEdit() {return true;}
+bool unirender::cycles::Renderer::SyncEditedActor(const util::Uuid &uuid)
 {
-	const_cast<Renderer*>(this)->SyncCamera(m_scene->GetCamera(),true);
-
-	m_cclScene->camera->need_flags_update = true;
-	m_cclScene->camera->need_device_update = true;
-	m_cclSession->reset(m_sessionParams,m_bufferParams);
+	auto *actor = FindActor(uuid);
+	if(!actor)
+		return false;
+	if(typeid(*actor) == typeid(Camera))
+		SyncCamera(static_cast<Camera&>(*actor),true);
+	else if(typeid(*actor) == typeid(Light))
+		SyncLight(*m_scene,static_cast<Light&>(*actor),true);
+	else
+		return false;
+	umath::set_flag(m_stateFlags,StateFlags::ReloadSessionScheduled);
 	return true;
 }
 
@@ -1421,6 +1442,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		shader->Finalize();
 	for(auto &cclShader : m_cclShaders)
 		cclShader->Finalize(*m_scene);
+	UpdateActorMap();
 
 	constexpr auto validate = false;
 	if constexpr(validate)
@@ -2068,6 +2090,17 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 			m_restartState = 0;
 			continue;
 		}
+
+		if(umath::is_flag_set(m_stateFlags,StateFlags::ReloadSessionScheduled) && (!m_displayDriver || m_displayDriver->WasTileWritten()))
+		{
+			umath::set_flag(m_stateFlags,StateFlags::ReloadSessionScheduled,false);
+			m_cclScene->camera->need_flags_update = true;
+			m_cclScene->camera->need_device_update = true;
+			m_cclSession->reset(m_sessionParams,m_bufferParams);
+			if(m_displayDriver)
+				m_displayDriver->ResetTileWrittenFlag();
+		}
+
 		if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine) && m_progressiveRunning == false)
 			break;
 		if(m_cclSession->progress.get_cancel())
@@ -2089,7 +2122,7 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 		}
 		if(umath::min(m_cclSession->progress.get_progress(),1.0) == 1.0)
 			break;
-		std::this_thread::sleep_for(std::chrono::seconds{1});
+		std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	}
 	if(worker.GetStatus() == util::JobStatus::Pending && fOnComplete != nullptr && fOnComplete() == RenderStageResult::Continue)
 		return;
@@ -2153,9 +2186,12 @@ void unirender::cycles::Renderer::PrepareCyclesSceneForRendering()
 
 void unirender::cycles::Renderer::SetCancelled(const std::string &msg)
 {
-	if(m_cclSession == nullptr)
+	std::scoped_lock lock {m_cancelMutex};
+	if(m_cancelled || m_cclSession == nullptr)
 		return;
+	m_cancelled = true;
 	m_cclSession->progress.set_cancel(msg);
+	m_cclSession->cancel(true);
 	m_tileManager.Cancel();
 }
 

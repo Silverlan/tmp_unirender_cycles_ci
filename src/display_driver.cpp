@@ -7,6 +7,7 @@
 
 #include "unirender/cycles/display_driver.hpp"
 #include <util_raytracing/tilemanager.hpp>
+#include <util_raytracing/denoise.hpp>
 #include <mathutil/color.h>
 #include <sharedutils/util_string.h>
 #include <sharedutils/util.h>
@@ -32,7 +33,20 @@ std::shared_ptr<uimg::ImageBuffer> unirender::cycles::BaseDriver::GetImageBuffer
 
 unirender::cycles::DisplayDriver::DisplayDriver(unirender::TileManager &tileManager,uint32_t width,uint32_t height)
 	: BaseDriver{{{"combined",uimg::Format::RGBA16}},width,height},m_tileManager{tileManager}
-{}
+{
+	auto imgCombined = m_imageBuffers["combined"];
+	m_mappedImageBuffer = uimg::ImageBuffer::Create(imgCombined->GetWidth(),imgCombined->GetHeight(),imgCombined->GetFormat());
+	m_pendingForPpImageBuffer = uimg::ImageBuffer::Create(imgCombined->GetWidth(),imgCombined->GetHeight(),imgCombined->GetFormat());
+	m_postProcessingThread = std::thread{[this]() {
+		while(m_ppThreadRunning)
+			RunPostProcessing();
+	}};
+}
+unirender::cycles::DisplayDriver::~DisplayDriver()
+{
+	m_ppThreadRunning = false;
+	m_postProcessingThread.join();
+}
 bool unirender::cycles::DisplayDriver::update_begin(const Params &params, int width, int height)
 {
 	if(width != m_width || height != m_height)
@@ -43,13 +57,19 @@ void unirender::cycles::DisplayDriver::update_end()
 {
 
 }
-ccl::half4 *unirender::cycles::DisplayDriver::map_texture_buffer()
+void unirender::cycles::DisplayDriver::RunPostProcessing()
 {
-	static_assert(sizeof(ccl::half4) == sizeof(uint16_t) *4);
-	return static_cast<ccl::half4*>(GetImageBuffer("combined")->GetData());
-}
-void unirender::cycles::DisplayDriver::unmap_texture_buffer()
-{
+	auto imgBuf = m_imageBuffers["combined"];
+	
+	{ // Note: This has to be scoped!
+		std::unique_lock<std::mutex> lock {m_postProcessingMutex};
+		m_postProcessingCondition.wait(lock,[this]() -> bool {return m_imageBufferReadyForPp || !m_ppThreadRunning;});
+		if(!m_ppThreadRunning)
+			return;
+		m_pendingForPpImageBuffer->Copy(*imgBuf);
+		m_imageBufferReadyForPp = false;
+	}
+
 	uint32_t tileIndex = 0;
 
 	auto &inputTile = m_tileManager.GetInputTiles()[tileIndex];
@@ -61,18 +81,51 @@ void unirender::cycles::DisplayDriver::unmap_texture_buffer()
 	inputTile.sample = 1;
 	inputTile.flags |= unirender::TileManager::TileData::Flags::HDRData;
 	inputTile.data.resize(inputTile.w *inputTile.h *sizeof(uint16_t) *4);
-	auto imgBuf = GetImageBuffer("combined");
 	imgBuf->Flip(true,true);
 	auto *data = imgBuf->GetData();
 	memcpy(inputTile.data.data(),data,util::size_of_container(inputTile.data));
+
+	// OIDN denoising is too slow to do during runtime, so it's disabled for now.
+	// Optix denoising may be worth a shot?
+	static auto denoise = false;
+	if(denoise)
+	{
+		denoise::Info denoiseInfo {};
+		denoiseInfo.hdr = true;
+		denoiseInfo.width = m_width;
+		denoiseInfo.height = m_height;
+		unirender::denoise::ImageData output {};
+		output.data = inputTile.data.data();
+		output.format = imgBuf->GetFormat();
+		unirender::denoise::ImageInputs inputs {};
+		inputs.beautyImage = output;
+		denoise::denoise(denoiseInfo,inputs,output);
+	}
 	m_tileManager.ApplyPostProcessingForProgressiveTile(inputTile);
 	m_tileManager.AddRenderedTile(std::move(inputTile));
 
 	m_tileWritten = true;
 }
+ccl::half4 *unirender::cycles::DisplayDriver::map_texture_buffer()
+{
+	static_assert(sizeof(ccl::half4) == sizeof(uint16_t) *4);
+	return static_cast<ccl::half4*>(m_mappedImageBuffer->GetData());
+}
+void unirender::cycles::DisplayDriver::unmap_texture_buffer()
+{
+	// We want to keep the overhead here to a bare minimum, in order to avoid
+	// stalling the Cycles renderer.
+	// To do that, we'll postpone the post-processing to a separate thread, and let
+	// Cycles continue with a different image buffer immediately.
+	std::scoped_lock lock {m_postProcessingMutex};
+	std::swap(m_mappedImageBuffer,m_pendingForPpImageBuffer);
+	m_imageBufferReadyForPp = true;
+	m_postProcessingCondition.notify_one();
+}
 void unirender::cycles::DisplayDriver::clear()
 {
-	auto imgBuf = GetImageBuffer("combined");
+	// TODO: m_pendingForPpImageBuffer should be cleared as well?
+	auto imgBuf = m_mappedImageBuffer;
 	auto *data = imgBuf->GetData();
 	memset(data,0,imgBuf->GetSize());
 }

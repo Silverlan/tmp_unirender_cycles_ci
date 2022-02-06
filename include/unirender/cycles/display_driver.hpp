@@ -13,6 +13,8 @@
 #include <util_image_types.hpp>
 #include <mathutil/uvec.h>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
 #include <memory>
 #include <vector>
 
@@ -24,6 +26,7 @@ namespace unirender::cycles
 	{
 	public:
 		BaseDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height);
+		virtual ~BaseDriver()=default;
 		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer(const std::string &pass) const;
 	protected:
 		uint32_t m_width = 0;
@@ -36,6 +39,7 @@ namespace unirender::cycles
 	{
 	public:
 		DisplayDriver(unirender::TileManager &tileManager,uint32_t width,uint32_t height);
+		virtual ~DisplayDriver() override;
 		virtual bool update_begin(const Params &params, int width, int height) override;
 		virtual void update_end() override;
 		virtual ccl::half4 *map_texture_buffer() override;
@@ -47,8 +51,17 @@ namespace unirender::cycles
 		void ResetTileWrittenFlag() {m_tileWritten = false;}
 		bool WasTileWritten() const {return m_tileWritten;}
 	private:
+		void RunPostProcessing();
 		unirender::TileManager &m_tileManager;
 		std::atomic<bool> m_tileWritten = false;
+		std::thread m_postProcessingThread;
+		std::mutex m_postProcessingMutex;
+		std::condition_variable m_postProcessingCondition;
+		
+		std::shared_ptr<uimg::ImageBuffer> m_mappedImageBuffer = nullptr;
+		std::shared_ptr<uimg::ImageBuffer> m_pendingForPpImageBuffer = nullptr;
+		std::atomic<bool> m_imageBufferReadyForPp = false;
+		std::atomic<bool> m_ppThreadRunning = true;
 	};
 
 	class OutputDriver

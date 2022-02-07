@@ -140,7 +140,7 @@ namespace unirender::cycles
 		void SyncObject(const unirender::Object &obj);
 		void SyncMesh(const unirender::Mesh &mesh);
 		void InitializeSession(unirender::Scene &scene,const ccl::DeviceInfo &devInfo);
-		std::optional<ccl::DeviceInfo> InitializeDevice(const unirender::Scene &scene);
+		std::optional<ccl::DeviceInfo> InitializeDevice(const unirender::Scene &scene,std::string &outErr);
 		bool Initialize(unirender::Scene &scene,std::string &outErr);
 		unirender::Scene::DeviceType m_deviceType = unirender::Scene::DeviceType::CPU;
 		std::unique_ptr<ccl::Session> m_cclSession = nullptr;

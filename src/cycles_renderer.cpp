@@ -287,7 +287,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 
 // Hip is not yet fully implemented in Cycles X, so it's currently disabled (state: 22-02-03)
 // #define ENABLE_AMD_HIP
-std::optional<ccl::DeviceInfo> unirender::cycles::Renderer::InitializeDevice(const unirender::Scene &scene)
+std::optional<ccl::DeviceInfo> unirender::cycles::Renderer::InitializeDevice(const unirender::Scene &scene,std::string &outErr)
 {
 	init_cycles();
 
@@ -306,30 +306,56 @@ std::optional<ccl::DeviceInfo> unirender::cycles::Renderer::InitializeDevice(con
 		 | ccl::DeviceTypeMask::DEVICE_MASK_HIP
 #endif
 		;
+	
 	auto &createInfo = scene.GetCreateInfo();
-	switch(createInfo.deviceType)
+
+	auto apiData = GetApiData();
+	std::string deviceOverride;
+	apiData.GetFromPath("cycles/device")(deviceOverride);
+	if(!deviceOverride.empty())
 	{
-	case unirender::Scene::DeviceType::GPU:
-	{
-		for(auto devType : gpuDeviceTypes)
+		auto dev = ccl::Device::type_from_string(deviceOverride.c_str());
+		if(dev == ccl::DeviceType::DEVICE_NONE)
 		{
-			if(is_device_type_available(devType))
+			std::string availableTypes;
+			for(auto devType : ccl::Device::available_types())
 			{
-				cclDeviceType = devType;
-				goto endLoop;
+				if(!availableTypes.empty())
+					availableTypes += ", ";
+				availableTypes += ccl::Device::string_from_type(devType);
 			}
+			outErr = "Unknown or unsupported device '" +deviceOverride +"'! Available devices are: " +availableTypes +".";
+			return {};
 		}
-		// No break is intended!
+		cclDeviceType = dev;
 	}
-	case unirender::Scene::DeviceType::CPU:
-		cclDeviceType = ccl::DeviceType::DEVICE_CPU;
-		break;
+	else
+	{
+		auto enableOptix = true;
+		apiData.GetFromPath("cycles/enableOptix")(enableOptix); // Optix doesn't work properly on some devices, so we need an option to disable it
+		switch(createInfo.deviceType)
+		{
+		case unirender::Scene::DeviceType::GPU:
+		{
+			for(auto devType : gpuDeviceTypes)
+			{
+				if(is_device_type_available(devType) && (devType != ccl::DeviceType::DEVICE_OPTIX || enableOptix))
+				{
+					cclDeviceType = devType;
+					goto endLoop;
+				}
+			}
+			// No break is intended!
+		}
+		case unirender::Scene::DeviceType::CPU:
+			cclDeviceType = ccl::DeviceType::DEVICE_CPU;
+			break;
+		}
+		static_assert(umath::to_integral(unirender::Scene::DeviceType::Count) == 2);
+
+	endLoop:
+		;
 	}
-	static_assert(umath::to_integral(unirender::Scene::DeviceType::Count) == 2);
-
-endLoop:
-	;
-
 	std::optional<ccl::DeviceInfo> device = {};
 	for(auto &devInfo : ccl::Device::available_devices(devices))
 	{
@@ -343,7 +369,10 @@ endLoop:
 	}
 	
 	if(device.has_value() == false)
+	{
+		outErr = "Device '" +ccl::Device::string_from_type(cclDeviceType) +"' is not available!";
 		return {}; // No device available
+	}
 
 	auto deviceType = createInfo.deviceType;
 	if(device->type == ccl::DeviceType::DEVICE_CPU)
@@ -1249,7 +1278,7 @@ bool unirender::cycles::Renderer::SyncEditedActor(const util::Uuid &uuid)
 
 bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string &outErr)
 {
-	auto devInfo = InitializeDevice(scene);
+	auto devInfo = InitializeDevice(scene,outErr);
 	if(devInfo.has_value() == false)
 		return false;
 
@@ -1361,6 +1390,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	{
 		m_cclScene->integrator->set_use_denoise(true);
 		m_cclScene->integrator->set_denoiser_type(denoiserType);
+		m_cclScene->integrator->set_denoise_start_sample(1);
 	}
 
 	apiData = GetApiData();
@@ -1494,12 +1524,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	std::vector<std::pair<std::string,uimg::Format>> passes;
 	passes.reserve(m_outputs.size());
 	for(auto &pair : m_outputs)
-	{
-		if(pair.first == OUTPUT_COLOR)
-			passes.push_back({pair.first,uimg::Format::RGBA32});
-		else
-			passes.push_back({pair.first,uimg::Format::RGB32});
-	}
+		passes.push_back({pair.first,uimg::Format::RGBA32});
 	auto displayDriver = std::make_unique<DisplayDriver>(m_tileManager,cam.GetWidth(),cam.GetHeight());
 	m_displayDriver = displayDriver.get();
 	auto outputDriver = std::make_unique<OutputDriver>(passes,cam.GetWidth(),cam.GetHeight());
@@ -1986,6 +2011,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
 					break;
 				}
+				resultImgBuf->ToHDR();
 				// ApplyPostProcessing(*resultImageBuffer,m_renderMode);
 
 				if(UpdateStereoEye(worker,stage,eyeStage))
@@ -2003,6 +2029,8 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				normalImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
 				assert(albedoImageBuffer != nullptr);
 				assert(normalImageBuffer != nullptr);
+				albedoImageBuffer->ToHDR();
+				normalImageBuffer->ToHDR();
 
 				std::string debugPass;
 				GetApiData().GetFromPath("debug/returnPassAsResult")(debugPass);
@@ -2108,7 +2136,7 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 			if(m_restartState != 0)
 				continue;
 			std::cerr<<"WARNING: Cycles rendering has been cancelled: "<<m_cclSession->progress.get_cancel_message()<<std::endl;
-			worker.Cancel(m_cclSession->progress.get_cancel_message());
+			worker.Cancel(m_cclSession->progress.get_cancel_message(),1 /* error code */);
 			break;
 		}
 		if(m_cclSession->progress.get_error())
@@ -2616,6 +2644,20 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	integrator.set_filter_glossy(0.f);
 	integrator.set_seed(0);
 	integrator.set_sampling_pattern(ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL);
+
+	auto apiData = GetApiData();
+	auto useAdaptiveSampling = true;
+	apiData.GetFromPath("cycles/useAdaptiveSampling")(useAdaptiveSampling);
+	if(useAdaptiveSampling)
+	{
+		auto adaptiveSamplingThreshold = 0.01f;
+		uint32_t minSamples = 0;
+		apiData.GetFromPath("cycles/adaptiveSamplingThreshold")(adaptiveSamplingThreshold);
+		apiData.GetFromPath("cycles/adaptiveMinSamples")(minSamples);
+		integrator.set_use_adaptive_sampling(true);
+		integrator.set_adaptive_threshold(adaptiveSamplingThreshold);
+		integrator.set_adaptive_min_samples(0);
+	}
 
 	integrator.set_sample_clamp_direct(0.f);
 	integrator.set_sample_clamp_indirect(0.f);

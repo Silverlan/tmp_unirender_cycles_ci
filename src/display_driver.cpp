@@ -41,10 +41,13 @@ unirender::cycles::DisplayDriver::DisplayDriver(unirender::TileManager &tileMana
 		while(m_ppThreadRunning)
 			RunPostProcessing();
 	}};
+
+	util::set_thread_name(m_postProcessingThread,"cycles_display_driver_pp");
 }
 unirender::cycles::DisplayDriver::~DisplayDriver()
 {
 	m_ppThreadRunning = false;
+	m_postProcessingCondition.notify_one();
 	m_postProcessingThread.join();
 }
 bool unirender::cycles::DisplayDriver::update_begin(const Params &params, int width, int height)

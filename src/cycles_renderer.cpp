@@ -198,7 +198,7 @@ float unirender::cycles::Renderer::ToCyclesLength(float len)
 
 std::shared_ptr<unirender::cycles::Renderer> unirender::cycles::Renderer::Create(const unirender::Scene &scene,Flags flags)
 {
-	auto renderer = std::shared_ptr<Renderer>{new Renderer{scene}};
+	auto renderer = std::shared_ptr<Renderer>{new Renderer{scene,flags}};
 	renderer->m_renderMode = scene.GetRenderMode();
 
 	auto &createInfo = scene.GetCreateInfo();
@@ -208,8 +208,8 @@ std::shared_ptr<unirender::cycles::Renderer> unirender::cycles::Renderer::Create
 	return renderer;
 }
 
-unirender::cycles::Renderer::Renderer(const Scene &scene)
-	: unirender::Renderer{scene}
+unirender::cycles::Renderer::Renderer(const Scene &scene,Flags flags)
+	: unirender::Renderer{scene,flags}
 {}
 unirender::cycles::Renderer::~Renderer()
 {
@@ -228,7 +228,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 	ccl::SessionParams sessionParams {};
 	sessionParams.shadingsystem = ccl::SHADINGSYSTEM_SVM;
 	sessionParams.device = devInfo;
-	sessionParams.background = true;
+	sessionParams.background = !umath::is_flag_set(m_flags,Flags::EnableLiveEditing); // Live denoising will not work for background mode
 	sessionParams.use_auto_tile = false;
 
 	switch(m_deviceType)
@@ -1391,6 +1391,12 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		m_cclScene->integrator->set_use_denoise(true);
 		m_cclScene->integrator->set_denoiser_type(denoiserType);
 		m_cclScene->integrator->set_denoise_start_sample(1);
+		// m_cclScene->integrator->set_denoiser_prefilter(ccl::DenoiserPrefilter::DENOISER_PREFILTER_FAST);
+		if(umath::is_flag_set(m_flags,Flags::EnableLiveEditing))
+		{
+			m_cclScene->integrator->set_use_denoise_pass_albedo(true);
+			m_cclScene->integrator->set_use_denoise_pass_normal(false);
+		}
 	}
 
 	apiData = GetApiData();

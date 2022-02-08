@@ -29,6 +29,7 @@ namespace unirender::cycles
 		virtual ~BaseDriver()=default;
 		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer(const std::string &pass) const;
 	protected:
+		void DebugDumpImages();
 		uint32_t m_width = 0;
 		uint32_t m_height = 0;
 		std::unordered_map<std::string,std::shared_ptr<uimg::ImageBuffer>> m_imageBuffers;

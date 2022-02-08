@@ -95,7 +95,7 @@ namespace unirender::cycles
 		// For internal use only
 		void SetStereoscopicEye(StereoEye eye);
 	private:
-		Renderer(const Scene &scene);
+		Renderer(const Scene &scene,Flags flags);
 
 		static ccl::ShaderOutput *FindShaderNodeOutput(ccl::ShaderNode &node,const std::string &output);
 		static ccl::ShaderNode *FindShaderNode(ccl::ShaderGraph &graph,const std::string &nodeName);

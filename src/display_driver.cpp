@@ -8,11 +8,24 @@
 #include "unirender/cycles/display_driver.hpp"
 #include <util_raytracing/tilemanager.hpp>
 #include <util_raytracing/denoise.hpp>
+#include <util_image.hpp>
 #include <mathutil/color.h>
 #include <sharedutils/util_string.h>
 #include <sharedutils/util.h>
+#include <fsys/filesystem.h>
+#include <fsys/ifile.hpp>
 #include <util_image_buffer.hpp>
 #pragma optimize("",off)
+static void dump_image_file(const std::string &name,uimg::ImageBuffer &imgBuf)
+{
+	auto f = filemanager::open_file("temp/cycles_driver_output_" +name +".hdr",filemanager::FileMode::Write | filemanager::FileMode::Binary);
+	if(f)
+	{
+		fsys::File fp {f};
+		uimg::save_image(fp,imgBuf,uimg::ImageFormat::HDR,1.f);
+	}
+}
+
 unirender::cycles::BaseDriver::BaseDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height)
 	: m_width{width},m_height{height}
 {
@@ -27,6 +40,12 @@ std::shared_ptr<uimg::ImageBuffer> unirender::cycles::BaseDriver::GetImageBuffer
 {
 	auto it = m_imageBuffers.find(pass);
 	return (it != m_imageBuffers.end()) ? it->second : nullptr;
+}
+
+void unirender::cycles::BaseDriver::DebugDumpImages()
+{
+	for(auto &pair : m_imageBuffers)
+		dump_image_file(pair.first,*pair.second);
 }
 
 ////////////
@@ -62,6 +81,9 @@ void unirender::cycles::DisplayDriver::update_end()
 }
 void unirender::cycles::DisplayDriver::RunPostProcessing()
 {
+	assert(m_tileManager.GetTileCount() > 0);
+	if(m_tileManager.GetTileCount() == 0)
+		return;
 	auto imgBuf = m_imageBuffers["combined"];
 	
 	{ // Note: This has to be scoped!
@@ -74,7 +96,7 @@ void unirender::cycles::DisplayDriver::RunPostProcessing()
 	}
 
 	uint32_t tileIndex = 0;
-
+	
 	auto &inputTile = m_tileManager.GetInputTiles()[tileIndex];
 	inputTile.x = 0;
 	inputTile.y = 0;
@@ -104,7 +126,9 @@ void unirender::cycles::DisplayDriver::RunPostProcessing()
 		inputs.beautyImage = output;
 		denoise::denoise(denoiseInfo,inputs,output);
 	}
-	m_tileManager.ApplyPostProcessingForProgressiveTile(inputTile);
+	static auto enablePp = true;
+	if(enablePp)
+		m_tileManager.ApplyPostProcessingForProgressiveTile(inputTile);
 	m_tileManager.AddRenderedTile(std::move(inputTile));
 
 	m_tileWritten = true;
@@ -121,6 +145,14 @@ void unirender::cycles::DisplayDriver::unmap_texture_buffer()
 	// To do that, we'll postpone the post-processing to a separate thread, and let
 	// Cycles continue with a different image buffer immediately.
 	std::scoped_lock lock {m_postProcessingMutex};
+
+	static auto debugDumpAsFile = false;
+	if(debugDumpAsFile)
+	{
+		debugDumpAsFile = false;
+		dump_image_file("combined",*m_mappedImageBuffer);
+	}
+
 	std::swap(m_mappedImageBuffer,m_pendingForPpImageBuffer);
 	m_imageBufferReadyForPp = true;
 	m_postProcessingCondition.notify_one();
@@ -153,6 +185,13 @@ void unirender::cycles::OutputDriver::write_render_tile(const Tile &tile)
 		if(!tile.get_pass_pixels(pair.first,imgBuf->GetChannelCount(),reinterpret_cast<float*>(m_tileData.data())))
 			return;
 		memcpy(imgBuf->GetData(),m_tileData.data(),util::size_of_container(m_tileData));
+	}
+
+	static auto debugDumpAsFile = false;
+	if(debugDumpAsFile)
+	{
+		debugDumpAsFile = false;
+		DebugDumpImages();
 	}
 }
 

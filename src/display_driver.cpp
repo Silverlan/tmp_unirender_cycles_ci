@@ -26,36 +26,15 @@ static void dump_image_file(const std::string &name,uimg::ImageBuffer &imgBuf)
 	}
 }
 
-unirender::cycles::BaseDriver::BaseDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height)
+unirender::cycles::BaseDriver::BaseDriver(uint32_t width,uint32_t height)
 	: m_width{width},m_height{height}
-{
-	m_imageBuffers.reserve(passes.size());
-	for(auto &pair : passes)
-	{
-		auto imgBuf = uimg::ImageBuffer::Create(width,height,pair.second);
-		m_imageBuffers[pair.first] = imgBuf;
-	}
-}
-std::shared_ptr<uimg::ImageBuffer> unirender::cycles::BaseDriver::GetImageBuffer(const std::string &pass) const
-{
-	auto it = m_imageBuffers.find(pass);
-	return (it != m_imageBuffers.end()) ? it->second : nullptr;
-}
-
-void unirender::cycles::BaseDriver::DebugDumpImages()
-{
-	for(auto &pair : m_imageBuffers)
-		dump_image_file(pair.first,*pair.second);
-}
+{}
 
 ////////////
 
 unirender::cycles::DisplayDriver::DisplayDriver(unirender::TileManager &tileManager,uint32_t width,uint32_t height)
-	: BaseDriver{{{"combined",uimg::Format::RGBA16}},width,height},m_tileManager{tileManager}
+	: BaseDriver{width,height},m_tileManager{tileManager}
 {
-	auto imgCombined = m_imageBuffers["combined"];
-	m_mappedImageBuffer = uimg::ImageBuffer::Create(imgCombined->GetWidth(),imgCombined->GetHeight(),imgCombined->GetFormat());
-	m_pendingForPpImageBuffer = uimg::ImageBuffer::Create(imgCombined->GetWidth(),imgCombined->GetHeight(),imgCombined->GetFormat());
 	m_postProcessingThread = std::thread{[this]() {
 		while(m_ppThreadRunning)
 			RunPostProcessing();
@@ -69,74 +48,126 @@ unirender::cycles::DisplayDriver::~DisplayDriver()
 	m_postProcessingCondition.notify_one();
 	m_postProcessingThread.join();
 }
-bool unirender::cycles::DisplayDriver::update_begin(const Params &params, int width, int height)
+void unirender::cycles::DisplayDriver::UpdateTileResolution(uint32_t tileWidth,uint32_t tileHeight)
 {
-	if(width != m_width || height != m_height)
+	if(tileWidth == m_tileWidth && tileHeight == m_tileHeight)
+		return;
+	m_tileWidth = tileWidth;
+	m_tileHeight = tileHeight;
+	m_numTilesX = m_width /m_tileWidth;
+	if((m_width %m_tileWidth) > 0)
+		++m_numTilesX;
+	auto numTilesY = m_height /m_tileHeight;
+	if((m_height %m_tileHeight) > 0)
+		++numTilesY;
+	auto tileCount = m_numTilesX *numTilesY;
+	m_tmpImageBuffers.reserve(tileCount);
+	m_mappedTileImageBuffers.reserve(tileCount);
+	m_pendingForPpTileImageBuffers.reserve(tileCount);
+	for(auto i=decltype(tileCount){0u};i<tileCount;++i)
+	{
+		m_tmpImageBuffers.push_back(uimg::ImageBuffer::Create(static_cast<void*>(nullptr),tileWidth,tileHeight,uimg::Format::RGBA16));
+		m_mappedTileImageBuffers.push_back(uimg::ImageBuffer::Create(tileWidth,tileHeight,uimg::Format::RGBA16));
+		m_pendingForPpTileImageBuffers.push_back(uimg::ImageBuffer::Create(tileWidth,tileHeight,uimg::Format::RGBA16));
+	}
+}
+uint32_t unirender::cycles::DisplayDriver::GetTileIndex(uint32_t x,uint32_t y) const
+{
+	auto numTilesX = m_numTilesX;
+	return (y /m_tileHeight) *numTilesX +(x /m_tileWidth);
+}
+bool unirender::cycles::DisplayDriver::update_begin(const Params &params, int effectiveWidth, int effectiveHeight)
+{
+	auto inBounds = (params.full_offset.x >= 0 && params.full_offset.y >= 0 && params.full_offset.x +effectiveWidth <= m_width && params.full_offset.y +effectiveHeight <= m_height);
+	assert(inBound);
+	if(!inBounds)
 		return false;
+	m_mappedSize = {effectiveWidth,effectiveHeight};
+	m_mappedOffset = {params.full_offset.x,params.full_offset.y};
+	m_mappedTileIndex = GetTileIndex(params.full_offset.x,params.full_offset.y);
 	return true;
 }
 void unirender::cycles::DisplayDriver::update_end()
 {
-
+	m_mappedSize = {0,0};
+	m_mappedOffset = {0,0};
+	m_mappedTileIndex = 0;
 }
 void unirender::cycles::DisplayDriver::RunPostProcessing()
 {
-	assert(m_tileManager.GetTileCount() > 0);
-	if(m_tileManager.GetTileCount() == 0)
-		return;
-	auto imgBuf = m_imageBuffers["combined"];
-	
+	struct TileData
+	{
+		TileInfo info;
+		std::vector<uint8_t> data;
+	};
+	std::queue<TileData> tileInfos;
 	{ // Note: This has to be scoped!
 		std::unique_lock<std::mutex> lock {m_postProcessingMutex};
-		m_postProcessingCondition.wait(lock,[this]() -> bool {return m_imageBufferReadyForPp || !m_ppThreadRunning;});
+		m_postProcessingCondition.wait(lock,[this]() -> bool {return !m_imageBufferReadyForPp.empty() || !m_ppThreadRunning;});
 		if(!m_ppThreadRunning)
 			return;
-		m_pendingForPpImageBuffer->Copy(*imgBuf);
-		m_imageBufferReadyForPp = false;
+		while(!m_imageBufferReadyForPp.empty())
+		{
+			auto tileInfo = m_imageBufferReadyForPp.front();
+			m_imageBufferReadyForPp.pop();
+
+			auto &src = *m_pendingForPpTileImageBuffers[tileInfo.tileIndex];
+			TileData tileData {};
+			tileData.info = tileInfo;
+			tileData.data.resize(tileInfo.effectiveSize.x *tileInfo.effectiveSize.y *src.GetPixelSize());
+			memcpy(tileData.data.data(),src.GetData(),util::size_of_container(tileData.data));
+			tileInfos.push(std::move(tileData));
+		}
 	}
 
-	uint32_t tileIndex = 0;
-	
-	auto &inputTile = m_tileManager.GetInputTiles()[tileIndex];
-	inputTile.x = 0;
-	inputTile.y = 0;
-	inputTile.w = m_width;
-	inputTile.h = m_height;
-	inputTile.index = tileIndex;
-	inputTile.sample = 1;
-	inputTile.flags |= unirender::TileManager::TileData::Flags::HDRData;
-	inputTile.data.resize(inputTile.w *inputTile.h *sizeof(uint16_t) *4);
-	imgBuf->Flip(true,true);
-	auto *data = imgBuf->GetData();
-	memcpy(inputTile.data.data(),data,util::size_of_container(inputTile.data));
-
-	// OIDN denoising is too slow to do during runtime, so it's disabled for now.
-	// Optix denoising may be worth a shot?
-	static auto denoise = false;
-	if(denoise)
+	while(!tileInfos.empty())
 	{
-		denoise::Info denoiseInfo {};
-		denoiseInfo.hdr = true;
-		denoiseInfo.width = m_width;
-		denoiseInfo.height = m_height;
-		unirender::denoise::ImageData output {};
-		output.data = inputTile.data.data();
-		output.format = imgBuf->GetFormat();
-		unirender::denoise::ImageInputs inputs {};
-		inputs.beautyImage = output;
-		denoise::denoise(denoiseInfo,inputs,output);
+		auto &tileData = tileInfos.front();
+		auto &tileInfo = tileData.info;
+
+		auto &inputTile = m_tileManager.GetInputTiles()[tileInfo.tileIndex];
+		inputTile.x = tileInfo.tileOffset.x;
+		inputTile.y = tileInfo.tileOffset.y;
+		inputTile.w = tileInfo.effectiveSize.x;
+		inputTile.h = tileInfo.effectiveSize.y;
+		inputTile.index = tileInfo.tileIndex;
+		inputTile.sample = 1; // Not accurate, but doesn't matter here
+		inputTile.flags |= unirender::TileManager::TileData::Flags::HDRData;
+		inputTile.data = std::move(tileData.data);
+		
+		auto &imgBuf = m_tmpImageBuffers[tileInfo.tileIndex];
+		imgBuf->Reset(inputTile.data.data(),inputTile.w,inputTile.h,imgBuf->GetFormat());
+		imgBuf->Flip(true,true);
+
+		// This is deprecated; Denoising is now handled through Cycles
+		static auto denoise = false;
+		if(denoise)
+		{
+			denoise::Info denoiseInfo {};
+			denoiseInfo.hdr = true;
+			denoiseInfo.width = inputTile.w;
+			denoiseInfo.height = inputTile.h;
+			unirender::denoise::ImageData output {};
+			output.data = inputTile.data.data();
+			output.format = imgBuf->GetFormat();
+			unirender::denoise::ImageInputs inputs {};
+			inputs.beautyImage = output;
+			denoise::denoise(denoiseInfo,inputs,output);
+		}
+		static auto enablePp = true;
+		if(enablePp)
+			m_tileManager.ApplyPostProcessingForProgressiveTile(inputTile);
+		m_tileManager.AddRenderedTile(std::move(inputTile));
+
+		tileInfos.pop();
 	}
-	static auto enablePp = true;
-	if(enablePp)
-		m_tileManager.ApplyPostProcessingForProgressiveTile(inputTile);
-	m_tileManager.AddRenderedTile(std::move(inputTile));
 
 	m_tileWritten = true;
 }
 ccl::half4 *unirender::cycles::DisplayDriver::map_texture_buffer()
 {
 	static_assert(sizeof(ccl::half4) == sizeof(uint16_t) *4);
-	return static_cast<ccl::half4*>(m_mappedImageBuffer->GetData());
+	return static_cast<ccl::half4*>(m_mappedTileImageBuffers[m_mappedTileIndex]->GetData());
 }
 void unirender::cycles::DisplayDriver::unmap_texture_buffer()
 {
@@ -146,24 +177,30 @@ void unirender::cycles::DisplayDriver::unmap_texture_buffer()
 	// Cycles continue with a different image buffer immediately.
 	std::scoped_lock lock {m_postProcessingMutex};
 
-	static auto debugDumpAsFile = false;
+	/*static auto debugDumpAsFile = false;
 	if(debugDumpAsFile)
 	{
 		debugDumpAsFile = false;
 		dump_image_file("combined",*m_mappedImageBuffer);
-	}
+	}*/
 
-	std::swap(m_mappedImageBuffer,m_pendingForPpImageBuffer);
-	m_imageBufferReadyForPp = true;
+	uint32_t tileIndex = m_mappedTileIndex;
+	auto &mappedImageBuffer = m_mappedTileImageBuffers[tileIndex];
+	auto &pendingForPpImageBuffer = m_pendingForPpTileImageBuffers[tileIndex];
+	std::swap(mappedImageBuffer,pendingForPpImageBuffer);
+	m_imageBufferReadyForPp.push({tileIndex,m_mappedOffset,m_mappedSize});
 	m_postProcessingCondition.notify_one();
 }
 void unirender::cycles::DisplayDriver::clear()
 {
 	// TODO: m_pendingForPpImageBuffer should be cleared as well?
-	auto imgBuf = m_mappedImageBuffer;
-	auto *data = imgBuf->GetData();
-	memset(data,0,imgBuf->GetSize());
+	for(auto &imgBuf : m_mappedTileImageBuffers)
+	{
+		auto *data = imgBuf->GetData();
+		memset(data,0,imgBuf->GetSize());
+	}
 }
+void unirender::cycles::DisplayDriver::next_tile_begin() {}
 void unirender::cycles::DisplayDriver::draw(const Params &params)
 {
 
@@ -172,9 +209,26 @@ void unirender::cycles::DisplayDriver::draw(const Params &params)
 ////////////
 
 unirender::cycles::OutputDriver::OutputDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height)
-	: BaseDriver{passes,width,height}
+	: BaseDriver{width,height}
 {
 	m_tileData.resize(width *height);
+
+	m_imageBuffers.reserve(passes.size());
+	for(auto &pair : passes)
+	{
+		auto imgBuf = uimg::ImageBuffer::Create(width,height,pair.second);
+		m_imageBuffers[pair.first] = imgBuf;
+	}
+}
+void unirender::cycles::OutputDriver::DebugDumpImages()
+{
+	for(auto &pair : m_imageBuffers)
+		dump_image_file(pair.first,*pair.second);
+}
+std::shared_ptr<uimg::ImageBuffer> unirender::cycles::OutputDriver::GetImageBuffer(const std::string &pass) const
+{
+	auto it = m_imageBuffers.find(pass);
+	return (it != m_imageBuffers.end()) ? it->second : nullptr;
 }
 void unirender::cycles::OutputDriver::write_render_tile(const Tile &tile)
 {

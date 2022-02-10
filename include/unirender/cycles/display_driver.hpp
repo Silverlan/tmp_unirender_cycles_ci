@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <thread>
 #include <mutex>
+#include <queue>
 #include <memory>
 #include <vector>
 
@@ -25,14 +26,11 @@ namespace unirender::cycles
 	class BaseDriver
 	{
 	public:
-		BaseDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height);
+		BaseDriver(uint32_t width,uint32_t height);
 		virtual ~BaseDriver()=default;
-		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer(const std::string &pass) const;
 	protected:
-		void DebugDumpImages();
 		uint32_t m_width = 0;
 		uint32_t m_height = 0;
-		std::unordered_map<std::string,std::shared_ptr<uimg::ImageBuffer>> m_imageBuffers;
 	};
 
 	class DisplayDriver
@@ -47,21 +45,42 @@ namespace unirender::cycles
 		virtual void unmap_texture_buffer() override;
 		virtual void clear() override;
 		virtual void draw(const Params &params) override;
-		virtual void next_tile_begin() override {};
+		virtual void next_tile_begin() override;
 
 		void ResetTileWrittenFlag() {m_tileWritten = false;}
 		bool WasTileWritten() const {return m_tileWritten;}
+
+		void UpdateTileResolution(uint32_t width,uint32_t height);
 	private:
+		struct TileInfo
+		{
+			uint32_t tileIndex = 0;
+			Vector2i tileOffset {};
+			Vector2i effectiveSize {};
+		};
 		void RunPostProcessing();
+		uint32_t GetTileIndex(uint32_t x,uint32_t y) const;
+		Vector2i GetTileOffset(uint32_t idx) const;
+		Vector2i GetTileSize(uint32_t idx) const;
+
+		uint32_t m_tileWidth = 0;
+		uint32_t m_tileHeight = 0;
+		uint32_t m_numTilesX = 0;
+		Vector2i m_mappedOffset = {0,0};
+		Vector2i m_mappedSize = {0,0};
+		uint32_t m_mappedTileIndex = 0;
+
 		unirender::TileManager &m_tileManager;
 		std::atomic<bool> m_tileWritten = false;
 		std::thread m_postProcessingThread;
 		std::mutex m_postProcessingMutex;
 		std::condition_variable m_postProcessingCondition;
+
+		std::vector<std::shared_ptr<uimg::ImageBuffer>> m_tmpImageBuffers;
 		
-		std::shared_ptr<uimg::ImageBuffer> m_mappedImageBuffer = nullptr;
-		std::shared_ptr<uimg::ImageBuffer> m_pendingForPpImageBuffer = nullptr;
-		std::atomic<bool> m_imageBufferReadyForPp = false;
+		std::vector<std::shared_ptr<uimg::ImageBuffer>> m_mappedTileImageBuffers;
+		std::vector<std::shared_ptr<uimg::ImageBuffer>> m_pendingForPpTileImageBuffers;
+		std::queue<TileInfo> m_imageBufferReadyForPp;
 		std::atomic<bool> m_ppThreadRunning = true;
 	};
 
@@ -70,6 +89,8 @@ namespace unirender::cycles
 	{
 	public:
 		OutputDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height);
+		std::shared_ptr<uimg::ImageBuffer> GetImageBuffer(const std::string &pass) const;
+
 		/* Write tile once it has finished rendering. */
 		virtual void write_render_tile(const Tile &tile) override;
 
@@ -82,7 +103,9 @@ namespace unirender::cycles
 		* true if any data was read. */
 		virtual bool read_render_tile(const Tile & /* tile */) override;
 	private:
+		void DebugDumpImages();
 		std::vector<Vector4> m_tileData;
+		std::unordered_map<std::string,std::shared_ptr<uimg::ImageBuffer>> m_imageBuffers;
 	};
 };
 

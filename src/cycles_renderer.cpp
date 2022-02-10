@@ -229,7 +229,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 	sessionParams.shadingsystem = ccl::SHADINGSYSTEM_SVM;
 	sessionParams.device = devInfo;
 	sessionParams.background = !umath::is_flag_set(m_flags,Flags::EnableLiveEditing); // Live denoising will not work for background mode
-	sessionParams.use_auto_tile = false;
+	sessionParams.use_auto_tile = false; // Tile rendering is no longer relevant for Cycles X (and causes the output driver to not function properly)
 
 	switch(m_deviceType)
 	{
@@ -1507,7 +1507,7 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	}
 
 	auto &sceneInfo = m_scene->GetSceneInfo();
-	if(createInfo.progressive && GetTileSize() > 0)
+	if(/*createInfo.progressive && */GetTileSize() > 0)
 	{
 		auto w = m_cclScene->camera->get_full_width();
 		auto h = m_cclScene->camera->get_full_height();
@@ -1531,7 +1531,12 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	passes.reserve(m_outputs.size());
 	for(auto &pair : m_outputs)
 		passes.push_back({pair.first,uimg::Format::RGBA32});
+
+	Vector2i tileSize {cam.GetWidth(),cam.GetHeight()};
+	if(m_cclSession->params.use_auto_tile)
+		tileSize = {m_cclSession->params.tile_size,m_cclSession->params.tile_size};
 	auto displayDriver = std::make_unique<DisplayDriver>(m_tileManager,cam.GetWidth(),cam.GetHeight());
+	displayDriver->UpdateTileResolution(tileSize.x,tileSize.y);
 	m_displayDriver = displayDriver.get();
 	auto outputDriver = std::make_unique<OutputDriver>(passes,cam.GetWidth(),cam.GetHeight());
 	m_outputDriver = outputDriver.get();

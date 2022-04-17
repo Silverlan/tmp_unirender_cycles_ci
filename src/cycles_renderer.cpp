@@ -755,10 +755,8 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 		auto &rot = light.GetRotation();
 		auto forward = uquat::forward(rot);
 		cclLight->set_dir(ToCyclesNormal(forward));
-		auto innerConeAngle = umath::deg_to_rad(light.GetInnerConeAngle());
-		auto outerConeAngle = umath::deg_to_rad(light.GetOuterConeAngle());
-		cclLight->set_spot_smooth((outerConeAngle > 0.f) ? (1.f -innerConeAngle /outerConeAngle) : 1.f);
-		cclLight->set_spot_angle(outerConeAngle);
+		cclLight->set_spot_smooth(light.GetBlendFraction());
+		cclLight->set_spot_angle(umath::deg_to_rad(light.GetOuterConeAngle()));
 		break;
 	}
 	case unirender::Light::Type::Directional:
@@ -807,8 +805,15 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 	//static float lightIntensityFactor = 10.f;
 	//watt *= lightIntensityFactor;
 
-	static auto lightIntensityMultiplier = 200.f;
-	watt *= scene.GetLightIntensityFactor() *lightIntensityMultiplier;
+	auto apiData = GetApiData();
+	auto customLightIntensityMultiplier = 1.f;
+	if(apiData.GetFromPath("lightIntensityMultiplier")(customLightIntensityMultiplier))
+		watt = customLightIntensityMultiplier;
+	else
+	{
+		static auto lightIntensityMultiplier = 200.f;
+		watt *= scene.GetLightIntensityFactor() *lightIntensityMultiplier;
+	}
 	auto &color = light.GetColor();
 	cclLight->set_strength(ccl::float3{color.r,color.g,color.b} *watt);
 	cclLight->set_size(ToCyclesLength(light.GetSize()));

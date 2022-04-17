@@ -65,37 +65,52 @@ link_external_library(util_raytracing)
 link_external_library(sharedutils)
 link_external_library(mathutil)
 link_external_library(vfilesystem)
+link_external_library(cycles_tbb)
+link_external_library(cycles_glog)
+link_external_library(util_udm)
+link_external_library(gflags)
 
 add_include_dir(cycles)
 add_include_dir(cycles_atomic)
-add_include_dir(openimageio)
-add_external_library(openimageio)
-link_external_library(openimagedenoise)
-add_include_dir(openexr)
+add_include_dir(cycles_pugixml)
+add_include_dir(cycles_openimageio)
+add_include_dir(cycles_openimagedenoise)
+add_include_dir(cycles_openexr)
+add_include_dir(cycles_embree)
+add_include_dir(cycles_osl)
 add_include_dir(glm)
 add_external_library(glew)
 add_external_library(tiff)
 add_external_library(lpng)
 add_external_library(zlib)
 add_external_library(jpeg)
+add_external_library(lz4)
 
 # Required for color management
 link_external_library(util_ocio)
-add_external_library(OpenEXR_Half)
-add_external_library(OpenEXR_Iex)
-add_external_library(OpenEXR_IlmThread)
-add_external_library(OpenEXR_Imath)
-add_external_library(OpenEXR_IlmImf)
-add_external_library(OpenColorIO)
-add_external_library(OpenImageIO)
 #
 
 set(DEPENDENCY_CYCLES_LIBRARY_LOCATION "" CACHE FILEPATH "Path to cycles libraries.")
+set(DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION "" CACHE FILEPATH "Path to cycles dependencies.")
 set(DEPENDENCY_OPENEXR_LIBRARY_LOCATION "" CACHE FILEPATH "Path to openexr libraries.")
 add_def(OIIO_STATIC_BUILD)
 add_def(GLEW_STATIC)
-add_def(CCL_NAMESPACE_BEGIN=namespace\ ccl\ {)
-add_def(CCL_NAMESPACE_END=})
+add_def(WITH_SYSTEM_PUGIXML)
+add_def(OIIO_STATIC_BUILD)
+add_def(OIIO_STATIC_DEFINE)
+add_def(WITH_OSL)
+add_def(OSL_STATIC_BUILD)
+add_def(OSL_STATIC_LIBRARY)
+add_def(WITH_OPTIX)
+add_def(WITH_EMBREE)
+add_def(WITH_OPENSUBDIV)
+add_def(WITH_OPENIMAGEDENOISE)
+add_def(OIDN_STATIC_LIB)
+add_def(WITH_CYCLES_LOGGING)
+add_def(GLOG_NO_ABBREVIATED_SEVERITIES)
+add_def(GOOGLE_GLOG_DLL_DECL=__declspec\(dllexport\))
+# add_def(CCL_NAMESPACE_BEGIN=namespace/ ccl/ {)
+# add_def(CCL_NAMESPACE_END=})
 
 ##### CONFIGURATION #####
 
@@ -109,7 +124,7 @@ function(def_vs_filters FILE_LIST)
 	foreach(source IN LISTS FILE_LIST)
 	    get_filename_component(source_path "${source}" PATH)
 	    string(REPLACE "${CMAKE_CURRENT_LIST_DIR}" "" source_path_relative "${source_path}")
-	    string(REPLACE "/" "\\" source_path_msvc "${source_path_relative}")
+	    string(REPLACE "/" "//" source_path_msvc "${source_path_relative}")
 	    source_group("${source_path_msvc}" FILES "${source}")
 	endforeach()
 endfunction(def_vs_filters)
@@ -118,6 +133,7 @@ file(GLOB_RECURSE SRC_FILES
     "${CMAKE_CURRENT_LIST_DIR}/src/*.h"
     "${CMAKE_CURRENT_LIST_DIR}/src/*.hpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/*.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/include/*.h"
     "${CMAKE_CURRENT_LIST_DIR}/include/*.hpp"
 )
@@ -149,6 +165,8 @@ set_target_properties(${PROJ_NAME} PROPERTIES ${TARGET_PROPERTIES})
 target_link_libraries(${PROJ_NAME}
 	opengl32
 	glu32
+	version
+	shlwapi
 )
 
 add_dependencies(${PROJ_NAME} util_raytracing)
@@ -156,14 +174,16 @@ add_dependencies(${PROJ_NAME} util_raytracing)
 if(WIN32)
 	set(DEPENDENCY_CYCLES_UTIL_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_util.lib CACHE PATH "Path to library." FORCE)
 	set(DEPENDENCY_CYCLES_DEVICE_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_device.lib CACHE PATH "Path to library." FORCE)
-	set(DEPENDENCY_CYCLES_RENDER_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_render.lib CACHE PATH "Path to library." FORCE)
 	set(DEPENDENCY_CYCLES_KERNEL_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_kernel.lib CACHE PATH "Path to library." FORCE)
 	set(DEPENDENCY_CYCLES_GRAPH_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_graph.lib CACHE PATH "Path to library." FORCE)
 	set(DEPENDENCY_CYCLES_SUBD_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_subd.lib CACHE PATH "Path to library." FORCE)
 	set(DEPENDENCY_CYCLES_BVH_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_bvh.lib CACHE PATH "Path to library." FORCE)
-	set(DEPENDENCY_CYCLES_CLEW_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/extern_clew.lib CACHE PATH "Path to library." FORCE)
 	set(DEPENDENCY_CYCLES_CUEW_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/extern_cuew.lib CACHE PATH "Path to library." FORCE)
-	set(DEPENDENCY_CYCLES_NUMAAPI_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/extern_numaapi.lib CACHE PATH "Path to library." FORCE)
+	set(DEPENDENCY_CYCLES_INTEGRATOR_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_integrator.lib CACHE PATH "Path to library." FORCE)
+	set(DEPENDENCY_CYCLES_KERNEL_OSL_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_kernel_osl.lib CACHE PATH "Path to library." FORCE)
+	set(DEPENDENCY_CYCLES_SCENE_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_scene.lib CACHE PATH "Path to library." FORCE)
+	set(DEPENDENCY_CYCLES_SESSION_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/cycles_session.lib CACHE PATH "Path to library." FORCE)
+	set(DEPENDENCY_CYCLES_SKY_LIBRARY ${DEPENDENCY_CYCLES_LIBRARY_LOCATION}/extern_sky.lib CACHE PATH "Path to library." FORCE)
 
 	# set(DEPENDENCY_OPENEXR_HALF_LIBRARY ${DEPENDENCY_OPENEXR_LIBRARY_LOCATION}/Half-2_3_static.lib CACHE PATH "Path to library." FORCE)
 	# set(DEPENDENCY_OPENEXR_IEX_LIBRARY ${DEPENDENCY_OPENEXR_LIBRARY_LOCATION}/Iex-2_3_static.lib CACHE PATH "Path to library." FORCE)
@@ -173,28 +193,172 @@ if(WIN32)
 	# set(DEPENDENCY_OPENEXR_ILM_THREAD ${DEPENDENCY_OPENEXR_LIBRARY_LOCATION}/IlmThread-2_3_static.lib CACHE PATH "Path to library." FORCE)
 	# set(DEPENDENCY_OPENEXR_IMATH ${DEPENDENCY_OPENEXR_LIBRARY_LOCATION}/Imath-2_3_static.lib CACHE PATH "Path to library." FORCE)
 	target_link_libraries(${PROJ_NAME}
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/osl/lib/oslcomp.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/osl/lib/oslexec.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/osl/lib/oslnoise.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/osl/lib/oslquery.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMAggressiveInstCombine.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMAnalysis.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMAsmParser.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMAsmPrinter.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMBinaryFormat.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMBitReader.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMBitWriter.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMBitstreamReader.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMCFGuard.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMCodeGen.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMCore.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMCoroutines.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMCoverage.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDWARFLinker.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDebugInfoCodeView.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDebugInfoDWARF.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDebugInfoGSYM.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDebugInfoMSF.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDebugInfoPDB.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDemangle.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMDlltoolDriver.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMExecutionEngine.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMExtensions.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMFileCheck.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMFrontendOpenACC.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMFrontendOpenMP.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMFuzzMutate.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMGlobalISel.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMHelloNew.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMIRReader.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMInstCombine.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMInstrumentation.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMInterfaceStub.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMInterpreter.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMJITLink.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMLTO.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMLibDriver.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMLineEditor.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMLinker.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMMC.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMMCA.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMMCDisassembler.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMMCJIT.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMMCParser.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMMIRParser.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMObjCARCOpts.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMObject.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMObjectYAML.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMOption.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMOrcJIT.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMOrcShared.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMOrcTargetProcess.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMPasses.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMProfileData.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMRemarks.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMRuntimeDyld.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMScalarOpts.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMSelectionDAG.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMSupport.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMSymbolize.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMTableGen.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMTarget.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMTextAPI.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMTransformUtils.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMVectorize.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMWindowsManifest.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMX86AsmParser.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMX86CodeGen.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMX86Desc.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMX86Disassembler.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMX86Info.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMXRay.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LLVMipo.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/LTO.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/Remarks.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangAPINotes.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangARCMigrate.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangAST.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangASTMatchers.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangAnalysis.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangBasic.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangCodeGen.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangCrossTU.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangDependencyScanning.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangDirectoryWatcher.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangDriver.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangDynamicASTMatchers.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangEdit.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangFormat.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangFrontend.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangFrontendTool.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangHandleCXX.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangHandleLLVM.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangIndex.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangIndexSerialization.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangLex.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangParse.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangRewrite.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangRewriteFrontend.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangSema.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangSerialization.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangStaticAnalyzerCheckers.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangStaticAnalyzerCore.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangStaticAnalyzerFrontend.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangTesting.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangTooling.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangToolingASTDiff.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangToolingCore.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangToolingInclusions.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangToolingRefactoring.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangToolingSyntax.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/clangTransformer.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/llvm/lib/libclang.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openjpeg/lib/openjp2.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/pugixml/lib/pugixml.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/embree3.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/embree_avx.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/embree_avx2.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/embree_sse42.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/lexers.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/math.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/simd.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/sys.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/embree/lib/tasking.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openvdb/lib/openvdb.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/OpenImageIO/lib/OpenImageIO.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/OpenImageIO/lib/OpenImageIO_Util.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openimagedenoise/lib/openimagedenoise.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openimagedenoise/lib/common.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openimagedenoise/lib/dnnl.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opensubdiv/lib/osdCPU.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opensubdiv/lib/osdGPU.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_filesystem-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_regex-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_system-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_thread-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_date_time-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_wave-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_chrono-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_atomic-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_serialization-vc141-mt-x64-1_73.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/Half_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/Iex_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/IlmThread_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/Imath_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/IlmImf_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/OpenColorIO.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/libexpatMD.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/libyaml-cpp.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/pystring.lib
+
 		${DEPENDENCY_CYCLES_UTIL_LIBRARY}
 		${DEPENDENCY_CYCLES_DEVICE_LIBRARY}
-		${DEPENDENCY_CYCLES_RENDER_LIBRARY}
 		${DEPENDENCY_CYCLES_KERNEL_LIBRARY}
 		${DEPENDENCY_CYCLES_GRAPH_LIBRARY}
 		${DEPENDENCY_CYCLES_SUBD_LIBRARY}
 		${DEPENDENCY_CYCLES_BVH_LIBRARY}
-		${DEPENDENCY_CYCLES_CLEW_LIBRARY}
 		${DEPENDENCY_CYCLES_CUEW_LIBRARY}
-		${DEPENDENCY_CYCLES_NUMAAPI_LIBRARY}
-
-		${DEPENDENCY_OPENEXR_HALF_LIBRARY}
-		${DEPENDENCY_OPENEXR_IEX_LIBRARY}
-		${DEPENDENCY_OPENEXR_IEX_MATH_LIBRARY}
-		${DEPENDENCY_OPENEXR_ILM_IMF_LIBRARY}
-		${DEPENDENCY_OPENEXR_ILM_IMF_UTIL}
-		${DEPENDENCY_OPENEXR_ILM_THREAD}
-		${DEPENDENCY_OPENEXR_IMATH}
-		${DEPENDENCY_BOOST_LIBRARY_LOCATION}/libboost_filesystem-vc142-mt-x64-1_76.lib
-		${DEPENDENCY_BOOST_LIBRARY_LOCATION}/libboost_date_time-vc142-mt-x64-1_76.lib
-		${DEPENDENCY_BOOST_LIBRARY_LOCATION}/libboost_thread-vc142-mt-x64-1_76.lib
-		${DEPENDENCY_BOOST_LIBRARY_LOCATION}/libboost_chrono-vc142-mt-x64-1_76.lib
-		${DEPENDENCY_BOOST_LIBRARY_LOCATION}/libboost_regex-vc142-mt-x64-1_76.lib
+		${DEPENDENCY_CYCLES_INTEGRATOR_LIBRARY}
+		${DEPENDENCY_CYCLES_KERNEL_OSL_LIBRARY}
+		${DEPENDENCY_CYCLES_SCENE_LIBRARY}
+		${DEPENDENCY_CYCLES_SESSION_LIBRARY}
+		${DEPENDENCY_CYCLES_SKY_LIBRARY}
 	)
 endif()

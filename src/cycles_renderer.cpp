@@ -821,6 +821,20 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 
 	cclLight->set_max_bounces(1'024);
 	cclLight->set_map_resolution(2'048);
+
+	auto uuid = util::uuid_to_string(light.GetUuid());
+	auto udmLight = apiData.GetFromPath("cycles/scene/actors/" +uuid);
+	if(udmLight)
+	{
+		uint32_t maxBounces;
+		if(udmLight["maxBounces"](maxBounces))
+			cclLight->set_max_bounces(maxBounces);
+
+		uint32_t mapResolution;
+		if(udmLight["mapResolution"](mapResolution))
+			cclLight->set_map_resolution(mapResolution);
+	}
+
 	cclLight->tag_update(m_cclScene);
 	// 
 	// Test

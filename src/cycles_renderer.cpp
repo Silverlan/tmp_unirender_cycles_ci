@@ -19,6 +19,7 @@
 #include "util_raytracing/model_cache.hpp"
 #include "util_raytracing/color_management.hpp"
 #include "util_raytracing/denoise.hpp"
+#include <sharedutils/util_hair.hpp>
 #include <util_ocio.hpp>
 #include <scene/light.h>
 #include <scene/camera.h>
@@ -37,6 +38,7 @@
 #include <scene/svm.h>
 #include <scene/bake.h>
 #include <scene/particles.h>
+#include <scene/hair.h>
 #include <util/path.h>
 #define ENABLE_CYCLES_LOGGING
 #ifdef ENABLE_CYCLES_LOGGING
@@ -50,7 +52,6 @@
 #endif
 
 #pragma optimize("",off)
-
 static std::optional<std::string> KERNEL_PATH {};
 void unirender::Scene::SetKernelPath(const std::string &kernelPath) {KERNEL_PATH = kernelPath;}
 int cycles_standalone_test(int argc, const char **argv,bool initPaths);
@@ -468,7 +469,7 @@ template<typename T,typename TCcl>
 }
 
 template<typename T,typename TCcl>
-	static void initialize_attribute(ccl::Mesh &mesh,ccl::AttributeStandard attrs,const std::vector<T> &data,const std::function<TCcl(const T&)> &translate)
+	static void initialize_attribute(ccl::Geometry &mesh,ccl::AttributeStandard attrs,const std::vector<T> &data,const std::function<TCcl(const T&)> &translate)
 {
 	auto *attr = mesh.attributes.add(attrs);
 	if(!attr)
@@ -542,7 +543,7 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	}
 
 	auto &shaders = mesh.GetSubMeshShaders();
-	auto usedShaders = cclMesh->get_used_shaders();
+	ccl::array<ccl::Node*> usedShaders;
 	usedShaders.resize(shaders.size());
 
 	auto apiData = GetApiData();
@@ -570,7 +571,8 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 				usedShaders[i] = **cclShader;
 		}
 	}
-	cclMesh->set_used_shaders(usedShaders);
+	auto usedShadersCpy = usedShaders;
+	cclMesh->set_used_shaders(usedShadersCpy);
 
 	// TODO: We should be using the tangent values from m_tangents / m_tangentSigns
 	// but their coordinate system needs to be converted for Cycles.
@@ -581,6 +583,51 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	{
 		auto *attr = cclMesh->attributes.add(ccl::ATTR_STD_GENERATED);
 		memcpy(attr->data_float3(), cclMesh->get_verts().data(), sizeof(ccl::float3) *cclMesh->get_verts().size());
+	}
+
+	for(auto &set : mesh.GetHairStrandDataSets())
+	{
+		if(set.shaderIndex >= usedShaders.size())
+			continue;
+		auto *shader = usedShaders[set.shaderIndex];
+
+		auto *cclHair = new ccl::Hair{};
+		m_cclScene->geometry.push_back(cclHair);
+
+		auto numHair = set.strandData.hairSegments.size();
+		uint32_t pointOffset = 0;
+		cclHair->reserve_curves(numHair,set.strandData.points.size());
+		std::vector<Vector2> testUv;
+		testUv.reserve(numHair);
+		for(auto i=decltype(numHair){0u};i<numHair;++i)
+		{
+			auto numSegments = set.strandData.hairSegments[i];
+			auto numPoints = numSegments +1;
+			cclHair->add_curve(pointOffset,0 /* shader */);
+			for(auto j=decltype(numPoints){0u};j<numPoints;++j)
+			{
+				auto &p = set.strandData.points[pointOffset +j];
+				auto thickness = set.strandData.thicknessData[pointOffset +j];
+				cclHair->add_curve_key(ccl::float3{p.x,-p.z,p.y},thickness);
+			}
+			testUv.push_back(set.strandData.uvs[pointOffset]);
+
+			pointOffset += numPoints;
+		}
+
+		initialize_attribute<Vector2,ccl::float2>(*cclHair,ccl::ATTR_STD_UV,testUv,[](const Vector2 &v) -> ccl::float2 {return ToCyclesUV(v);});
+
+		ccl::array<ccl::Node*> shaders;
+		shaders.resize(1);
+		shaders[0] = shader;
+		cclHair->set_used_shaders(shaders);
+
+		//attr_uv = hair->attributes.add(name, TypeFloat2, ATTR_ELEMENT_CURVE);
+
+		auto *cclObj = new ccl::Object{};
+		m_cclScene->objects.push_back(cclObj);
+		//cclObj->set_tfm(ToCyclesTransform(obj.GetPose()));
+		cclObj->set_geometry(cclHair);
 	}
 }
 

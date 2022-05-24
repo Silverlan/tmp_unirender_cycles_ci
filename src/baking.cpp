@@ -317,25 +317,25 @@ static void store_bake_pixel(void *handle, int x, int y, float u, float v)
 	const int i = offset + y * width + x;
 
 	pixel = &bd->pixel_array[i];
-	pixel->primitive_id = bd->primitive_id;
+	pixel->primitiveId = bd->primitive_id;
 
-	copy_v2_fl2(pixel->uv, u, v);
+	copy_v2_fl2(pixel->uv.data(), u, v);
 
 	pixel->du_dx = bd->du_dx;
 	pixel->du_dy = bd->du_dy;
 	pixel->dv_dx = bd->dv_dx;
 	pixel->dv_dy = bd->dv_dy;
-	pixel->object_id = bd->object_id;
+	pixel->objectId = bd->object_id;
 }
 
 void unirender::baking::prepare_bake_data(const cycles::Renderer &renderer,unirender::Object &o,BakePixel *pixelArray,uint32_t numPixels,uint32_t imgWidth,uint32_t imgHeight,bool useLightmapUvs)
 {
-#if 0
 	/* initialize all pixel arrays so we know which ones are 'blank' */
 	for(auto i=decltype(numPixels){0u};i<numPixels;++i)
 	{
-		pixelArray[i].primitive_id = -1;
-		pixelArray[i].object_id = -1;
+		pixelArray[i].primitiveId = -1;
+		pixelArray[i].objectId = -1;
+		pixelArray[i].seed = 0;
 	}
 
 
@@ -359,7 +359,8 @@ void unirender::baking::prepare_bake_data(const cycles::Renderer &renderer,unire
 	assert(objId.has_value());
 	bd.object_id = *objId;
 	auto *cclMesh = renderer.FindCclMesh(mesh);
-	auto numTris = cclMesh->triangles.size() /3;
+	auto &tris = cclMesh->get_triangles();
+	auto numTris = tris.size() /3;
 	for(auto i=decltype(numTris){0u};i<numTris;++i)
 	{
 		int32_t imageId = 0;
@@ -368,7 +369,7 @@ void unirender::baking::prepare_bake_data(const cycles::Renderer &renderer,unire
 		bd.primitive_id = i;
 
 		float vec[3][2];
-		auto *tri = &cclMesh->triangles[i *3];
+		auto *tri = &tris[i *3];
 		for(uint8_t j=0;j<3;++j)
 		{
 			const float *uv = reinterpret_cast<const float*>(&uvs[tri[j]]);
@@ -384,7 +385,6 @@ void unirender::baking::prepare_bake_data(const cycles::Renderer &renderer,unire
 		bake_differentials(&bd, vec[0], vec[1], vec[2]);
 		zspan_scanconvert(&bd.zspan[imageId], (void *)&bd, vec[0], vec[1], vec[2], store_bake_pixel);
 	}
-#endif
 }
 
 // Source: blender/blenlib/intern/math_base_inline.c
@@ -570,7 +570,7 @@ void unirender::baking::RE_bake_margin(ImBuf *ibuf, std::vector<uint8_t> &mask, 
 	IMB_filter_extend(ibuf, mask, margin);
 }
 
-void unirender::baking::RE_bake_mask_fill(const std::vector<BakePixel> pixel_array, const size_t num_pixels, char *mask)
+void unirender::baking::RE_bake_mask_fill(const std::vector<BakePixel> &pixel_array, const size_t num_pixels, char *mask)
 {
 	size_t i;
 	if (!mask) {
@@ -579,7 +579,7 @@ void unirender::baking::RE_bake_mask_fill(const std::vector<BakePixel> pixel_arr
 
 	/* only extend to pixels outside the mask area */
 	for (i = 0; i < num_pixels; i++) {
-		if (pixel_array[i].primitive_id != -1) {
+		if (pixel_array[i].primitiveId != -1) {
 			mask[i] = FILTER_MASK_USED;
 		}
 	}

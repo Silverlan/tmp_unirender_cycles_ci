@@ -15,7 +15,11 @@
 #include <cinttypes>
 #include <atomic>
 
-namespace unirender {class Scene; namespace cycles {class Renderer;};};
+namespace unirender
+{
+	class Scene; namespace cycles {class Renderer;};
+	namespace baking {struct BakeData;};
+};
 namespace unirender::cycles
 {
 	void compute_tangents(ccl::Mesh *mesh,bool need_sign,bool active_render);
@@ -102,6 +106,7 @@ namespace unirender::cycles
 		static ccl::ShaderNode *FindShaderNode(ccl::ShaderGraph &graph,const OpenImageIO_v2_1::ustring &name);
 
 		virtual void SetCancelled(const std::string &msg="Cancelled by application.") override;
+		bool InitializeBakingData();
 		void FinalizeAndCloseCyclesScene();
 		void CloseCyclesScene();
 		void ApplyPostProcessing(uimg::ImageBuffer &imgBuffer,unirender::Scene::RenderMode renderMode);
@@ -156,6 +161,7 @@ namespace unirender::cycles
 		StateFlags m_stateFlags = StateFlags::None;
 		std::mutex m_cancelMutex;
 		bool m_cancelled = false;
+		std::unique_ptr<baking::BakeData> m_bakeData = nullptr;
 
 		ccl::SessionParams m_sessionParams;
 		ccl::BufferParams m_bufferParams;

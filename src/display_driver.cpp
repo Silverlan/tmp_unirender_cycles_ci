@@ -6,6 +6,7 @@
 */
 
 #include "unirender/cycles/display_driver.hpp"
+#include "unirender/cycles/baking.hpp"
 #include <util_raytracing/tilemanager.hpp>
 #include <util_raytracing/denoise.hpp>
 #include <util_image.hpp>
@@ -251,11 +252,74 @@ void unirender::cycles::OutputDriver::write_render_tile(const Tile &tile)
 
 bool unirender::cycles::OutputDriver::update_render_tile(const Tile & tile )
 {
+	//write_render_tile(tile);
 	return false;
 }
 
-bool unirender::cycles::OutputDriver::read_render_tile(const Tile & /* tile */)
+static float intToFloat(int32_t i)
 {
-	return false;
+	union {
+		int i;
+		float f;
+	} u;
+	u.i = i;
+	return u.f;
+}
+void unirender::cycles::OutputDriver::SetBakeData(const baking::BakeData &bakeData) {m_bakeData = &bakeData;}
+bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
+{
+	if(!m_bakeData)
+		return false;
+	auto &bakeData = *m_bakeData;
+
+	auto w = tile.size.x;
+	auto h = tile.size.y;
+	auto x = tile.offset.x;
+	auto y = tile.offset.y;
+	std::vector<float> primitiveData;
+	std::vector<float> differentialData;
+	primitiveData.resize(w *h *4);
+	differentialData.resize(w *h *4);
+
+	for(int ty = 0; ty < h; ty++)
+	{
+		size_t offset = ty * w * 4;
+		float *primitive = primitiveData.data() + offset;
+		float *differential = differentialData.data() + offset;
+
+		size_t bake_offset = (y + ty) * bakeData.width + x;
+		const baking::BakePixel *bake_pixel = bakeData.pixels.data() + bake_offset;
+
+		for (int tx = 0; tx < w; tx++)
+		{
+			if (bake_pixel->objectId != bakeData.object_id)
+			{
+				primitive[0] = intToFloat(-1);
+				primitive[1] = intToFloat(-1);
+			}
+			else
+			{
+				primitive[0] = intToFloat(bake_pixel->seed);
+				primitive[1] = intToFloat(bake_pixel->primitiveId);
+				primitive[2] = bake_pixel->uv[0];
+				primitive[3] = bake_pixel->uv[1];
+
+				differential[0] = bake_pixel->du_dx;
+				differential[1] = bake_pixel->du_dy;
+				differential[2] = bake_pixel->dv_dx;
+				differential[3] = bake_pixel->dv_dy;
+			}
+
+			primitive += 4;
+			differential += 4;
+			bake_pixel++;
+		}
+	}
+
+	auto imgPrimitive = uimg::ImageBuffer::Create(primitiveData.data(),w,h,uimg::Format::RGBA32,true);
+	auto imgDifferential = uimg::ImageBuffer::Create(differentialData.data(),w,h,uimg::Format::RGBA32,true);
+	tile.set_pass_pixels("BakePrimitive",imgPrimitive->GetChannelCount(),reinterpret_cast<float*>(imgPrimitive->GetData()));
+	tile.set_pass_pixels("BakeDifferential",imgDifferential->GetChannelCount(),reinterpret_cast<float*>(imgDifferential->GetData()));
+	return true;
 }
 #pragma optimize("",on)

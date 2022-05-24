@@ -31,11 +31,22 @@ namespace unirender
 	{
 		// Note: These are various utility functions from the blender repository, which are required
 		// for baking with cycles.
-		struct BakePixel {
-			int primitive_id, object_id;
-			float uv[2];
-			float du_dx, du_dy;
-			float dv_dx, dv_dy;
+		struct BakePixel
+		{
+			int32_t primitiveId;
+			int32_t objectId;
+			int32_t seed;
+			std::array<float,2> uv;
+			float du_dx,du_dy;
+			float dv_dx,dv_dy;
+		};
+
+		struct BakeData
+		{
+			uint32_t width = 0;
+			uint32_t height = 0;
+			std::vector<BakePixel> pixels;
+			uint32_t object_id = 0;
 		};
 
 		typedef struct ImBuf {
@@ -50,7 +61,7 @@ namespace unirender
 			const int num_pixels);*/
 		unsigned char unit_float_to_uchar_clamp(float val);
 		unsigned short unit_float_to_ushort_clamp(float val);
-		void RE_bake_mask_fill(const std::vector<BakePixel> pixel_array, const size_t num_pixels, char *mask);
+		void RE_bake_mask_fill(const std::vector<BakePixel> &pixel_array, const size_t num_pixels, char *mask);
 		void RE_bake_margin(ImBuf *ibuf, std::vector<uint8_t> &mask, const int margin);
 	};
 }

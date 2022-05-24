@@ -20,7 +20,11 @@
 #include <vector>
 
 namespace uimg {class ImageBuffer;};
-namespace unirender {class TileManager;};
+namespace unirender
+{
+	class TileManager;
+	namespace baking {struct BakeData;};
+};
 namespace unirender::cycles
 {
 	class BaseDriver
@@ -102,10 +106,13 @@ namespace unirender::cycles
 		* to determine which shading points to use for baking at each pixel. Return
 		* true if any data was read. */
 		virtual bool read_render_tile(const Tile & /* tile */) override;
+
+		void SetBakeData(const baking::BakeData &bakeData);
 	private:
 		void DebugDumpImages();
 		std::vector<Vector4> m_tileData;
 		std::unordered_map<std::string,std::shared_ptr<uimg::ImageBuffer>> m_imageBuffers;
+		const baking::BakeData *m_bakeData = nullptr;
 	};
 };
 

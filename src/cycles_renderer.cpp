@@ -196,7 +196,6 @@ float unirender::cycles::Renderer::ToCyclesLength(float len)
 	auto scale = util::pragma::units_to_metres(1.f);
 	return len *scale;
 }
-
 std::shared_ptr<unirender::cycles::Renderer> unirender::cycles::Renderer::Create(const unirender::Scene &scene,Flags flags)
 {
 	auto renderer = std::shared_ptr<Renderer>{new Renderer{scene,flags}};
@@ -425,6 +424,7 @@ ccl::Light *unirender::cycles::Renderer::FindCclLight(const Light &light)
 void unirender::cycles::Renderer::SyncObject(const unirender::Object &obj)
 {
 	auto *cclObj = new ccl::Object{};
+	cclObj->name = obj.GetName();
 	m_cclScene->objects.push_back(cclObj);
 	m_objectToCclObject[&obj] = cclObj;
 	cclObj->set_tfm(ToCyclesTransform(obj.GetPose()));
@@ -1428,6 +1428,8 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		AddOutput(OUTPUT_DEPTH);
 		break;
 	case unirender::Scene::RenderMode::BakeAmbientOcclusion:
+		AddOutput(OUTPUT_AO);
+		break;
 	case unirender::Scene::RenderMode::BakeNormals:
 	case unirender::Scene::RenderMode::BakeDiffuseLighting:
 		AddOutput(OUTPUT_COLOR);
@@ -1598,6 +1600,12 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	for(auto &pair : m_outputs)
 		passes.push_back({pair.first,uimg::Format::RGBA32});
 
+	if(m_scene->HasBakeTarget() && !InitializeBakingData())
+	{
+		outErr = "Failed to initialize bake data.";
+		return false;
+	}
+
 	Vector2i tileSize {cam.GetWidth(),cam.GetHeight()};
 	if(m_cclSession->params.use_auto_tile)
 		tileSize = {m_cclSession->params.tile_size,m_cclSession->params.tile_size};
@@ -1605,11 +1613,24 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	displayDriver->UpdateTileResolution(tileSize.x,tileSize.y);
 	m_displayDriver = displayDriver.get();
 	auto outputDriver = std::make_unique<OutputDriver>(passes,cam.GetWidth(),cam.GetHeight());
+	if(m_bakeData)
+		static_cast<OutputDriver&>(*outputDriver).SetBakeData(*m_bakeData);
 	m_outputDriver = outputDriver.get();
 	m_cclSession->set_display_driver(std::move(displayDriver));
 	m_cclSession->set_output_driver(std::move(outputDriver));
 
 	//
+
+	if(scene.GetRenderMode() == Scene::RenderMode::BakeAmbientOcclusion)
+	{
+		m_cclScene->integrator->set_use_direct_light(false);
+		m_cclScene->integrator->set_use_indirect_light(false);
+		m_cclScene->background->set_transparent(true);
+	}
+
+	auto *bakeTarget = m_scene->GetBakeTargetName();
+	if(bakeTarget)
+		m_cclScene->bake_manager->set(m_cclScene,*bakeTarget);
 
 #if 0
 	{
@@ -1996,7 +2017,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				return RenderStageResult::Complete;
 			}
 
-			if(Scene::IsRenderSceneMode(m_renderMode))
+			//if(Scene::IsRenderSceneMode(m_renderMode))
 			{
 				auto &cam = m_scene->GetCamera();
 				auto stereoscopic = cam.IsStereoscopic();
@@ -2005,9 +2026,6 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				ImageRenderStage initialRenderStage;
 				switch(m_renderMode)
 				{
-				case Scene::RenderMode::RenderImage:
-					initialRenderStage = ImageRenderStage::Lighting;
-					break;
 				case Scene::RenderMode::SceneAlbedo:
 					initialRenderStage = ImageRenderStage::SceneAlbedo;
 					break;
@@ -2018,23 +2036,27 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					initialRenderStage = ImageRenderStage::SceneDepth;
 					break;
 				default:
-					throw std::invalid_argument{"Invalid render mode " +std::to_string(umath::to_integral(m_renderMode))};
+					initialRenderStage = ImageRenderStage::Lighting;
+					break;
+				//default:
+				//	throw std::invalid_argument{"Invalid render mode " +std::to_string(umath::to_integral(m_renderMode))};
 				}
 				StartNextRenderStage(worker,initialRenderStage,stereoscopic ? StereoEye::Left : StereoEye::None);
 				worker.Start();
 			}
-			else
+			/*else
 			{
 				StartNextRenderStage(worker,ImageRenderStage::Bake,StereoEye::None);
 				worker.Start();
-			}
+			}*/
 			return RenderStageResult::Continue;
 		});
 		break;
 	}
 	case ImageRenderStage::Bake:
 	{
-		StartTextureBaking(worker);
+		// Unused
+		// StartTextureBaking(worker);
 		break;
 	}
 	case ImageRenderStage::Lighting:
@@ -2073,21 +2095,55 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				}
 
 				auto &resultImgBuf = GetResultImageBuffer(OUTPUT_COLOR,eyeStage);
-				switch(stage)
+				if(m_bakeData)
 				{
-				case ImageRenderStage::SceneAlbedo:
-					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_ALBEDO);
-					break;
-				case ImageRenderStage::SceneNormals:
-					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
-					break;
-				case ImageRenderStage::SceneDepth:
-					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_DEPTH);
-					break;
-				default:
-					resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
-					break;
+					auto renderMode = m_scene->GetRenderMode();
+					switch(renderMode)
+					{
+					case Scene::RenderMode::BakeAmbientOcclusion:
+						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_AO);
+						break;
+					default:
+						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
+						break;
+					}
+
+					worker.SetResultMessage("Baking margin...");
+
+					resultImgBuf->Convert(uimg::Format::RGBA_FLOAT);
+					unirender::baking::ImBuf ibuf {};
+					ibuf.x = resultImgBuf->GetWidth();
+					ibuf.y = resultImgBuf->GetHeight();
+					ibuf.rect = resultImgBuf;
+
+					// Apply margin
+					// TODO: Margin only required for certain bake types?
+					auto numPixels = resultImgBuf->GetPixelCount();
+					std::vector<uint8_t> mask_buffer {};
+					mask_buffer.resize(numPixels);
+					constexpr auto margin = 16u;
+					baking::RE_bake_mask_fill(m_bakeData->pixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
+					RE_bake_margin(&ibuf, mask_buffer, margin);
 				}
+				else
+				{
+					switch(stage)
+					{
+					case ImageRenderStage::SceneAlbedo:
+						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_ALBEDO);
+						break;
+					case ImageRenderStage::SceneNormals:
+						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
+						break;
+					case ImageRenderStage::SceneDepth:
+						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_DEPTH);
+						break;
+					default:
+						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
+						break;
+					}
+				}
+
 				resultImgBuf->ToHDR();
 				// ApplyPostProcessing(*resultImageBuffer,m_renderMode);
 
@@ -2225,7 +2281,9 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 			worker.SetStatus(util::JobStatus::Failed,m_cclSession->progress.get_error_message());
 			break;
 		}
-		if(umath::min(m_cclSession->progress.get_progress(),1.0) == 1.0)
+		std::string status,subStatus;
+		m_cclSession->progress.get_status(status,subStatus);
+		if(umath::min(m_cclSession->progress.get_progress(),1.0) == 1.0 || status == "Finished")
 			break;
 		std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	}
@@ -2304,14 +2362,41 @@ void unirender::cycles::Renderer::CloseCyclesScene()
 {
 	m_renderData = {};
 	m_tileManager.StopAndWait();
+	m_bakeData = nullptr;
 
 	if(m_cclSession == nullptr)
 		return;
 	m_cclSession = nullptr;
 }
 
-#include <util_image.hpp>
-#include <fsys/filesystem.h>
+bool unirender::cycles::Renderer::InitializeBakingData()
+{
+	auto *bakeName = m_scene->GetBakeTargetName();
+	if(!bakeName)
+		return false;
+	auto resolution = m_scene->GetResolution();
+	auto imgWidth = resolution.x;
+	auto imgHeight = resolution.y;
+	auto numPixels = imgWidth *imgHeight;
+	auto *o = FindObject(*bakeName);
+	auto *aoTarget = o ? FindCclObject(*o) : nullptr;
+	if(aoTarget == nullptr)
+		return false;
+	m_bakeData = std::make_unique<baking::BakeData>();
+	m_bakeData->width = imgWidth;
+	m_bakeData->height = imgHeight;
+	auto &pixelArray = m_bakeData->pixels;
+	pixelArray.resize(numPixels);
+	auto bakeLightmaps = (m_renderMode == Scene::RenderMode::BakeDiffuseLighting);
+
+	unirender::baking::prepare_bake_data(*this,*o,pixelArray.data(),numPixels,imgWidth,imgHeight,bakeLightmaps);
+
+	auto objectId = aoTarget ? FindCCLObjectId(*aoTarget) : std::optional<uint32_t>{};
+	if(!objectId.has_value())
+		return false;
+	m_bakeData->object_id = *objectId;
+	return true;
+}
 void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 {
 #if 0
@@ -2683,7 +2768,7 @@ void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)
 void unirender::cycles::Renderer::FinalizeAndCloseCyclesScene()
 {
 	auto stateFlags = m_scene->GetStateFlags();
-	if(m_cclSession && m_scene->IsRenderSceneMode(m_scene->GetRenderMode()) && umath::is_flag_set(m_stateFlags,StateFlags::RenderingStarted))
+	if(m_cclSession && m_outputDriver && m_scene->IsRenderSceneMode(m_scene->GetRenderMode()) && umath::is_flag_set(m_stateFlags,StateFlags::RenderingStarted))
 		GetResultImageBuffer(OUTPUT_COLOR) = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
 	CloseCyclesScene();
 }
@@ -2692,7 +2777,8 @@ void unirender::cycles::Renderer::CloseRenderScene() {CloseCyclesScene();}
 
 void unirender::cycles::Renderer::FinalizeImage(uimg::ImageBuffer &imgBuf,StereoEye eyeStage)
 {
-	imgBuf.Flip(true,true);
+	if(!m_scene->HasBakeTarget()) // Don't need to flip if we're baking
+		imgBuf.Flip(true,true);
 }
 
 void unirender::cycles::Renderer::SetupRenderSettings(
@@ -2703,6 +2789,9 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	auto &sceneInfo = m_scene->GetSceneInfo();
 	// Default parameters taken from Blender
 	auto &integrator = *scene.integrator;
+	auto &film = *scene.film;
+	
+	auto apiData = GetApiData();
 	integrator.set_min_bounce(0);
 	integrator.set_max_bounce(sceneInfo.maxBounces);
 	integrator.set_max_diffuse_bounce(sceneInfo.maxDiffuseBounces);
@@ -2722,7 +2811,6 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	integrator.set_seed(0);
 	integrator.set_sampling_pattern(ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL);
 
-	auto apiData = GetApiData();
 	auto useAdaptiveSampling = true;
 	apiData.GetFromPath("cycles/useAdaptiveSampling")(useAdaptiveSampling);
 	if(useAdaptiveSampling)
@@ -2756,7 +2844,6 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	integrator.tag_modified();
 
 	// Film
-	auto &film = *scene.film;
 	film.set_exposure(1.f);
 	film.set_filter_type(ccl::FilterType::FILTER_GAUSSIAN);
 	film.set_filter_width(1.5f);
@@ -2810,6 +2897,13 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 				pass->set_type(ccl::PASS_DEPTH);
 			else
 				pass->set_type(ccl::PASS_DENOISING_DEPTH);
+		}
+		else if(pair.first == OUTPUT_AO)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_AO});
+			pass->set_type(ccl::PASS_AO);
+			pass->set_include_albedo(false);
 		}
 	}
 

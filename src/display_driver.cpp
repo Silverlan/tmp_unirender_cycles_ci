@@ -210,14 +210,18 @@ void unirender::cycles::DisplayDriver::draw(const Params &params)
 ////////////
 
 unirender::cycles::OutputDriver::OutputDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height)
-	: BaseDriver{width,height}
+	: BaseDriver{width,height},m_passes{passes}
 {
 	m_tileData.resize(width *height);
-
-	m_imageBuffers.reserve(passes.size());
-	for(auto &pair : passes)
+	Reset();
+}
+void unirender::cycles::OutputDriver::Reset()
+{
+	m_imageBuffers.clear();
+	m_imageBuffers.reserve(m_passes.size());
+	for(auto &pair : m_passes)
 	{
-		auto imgBuf = uimg::ImageBuffer::Create(width,height,pair.second);
+		auto imgBuf = uimg::ImageBuffer::Create(m_width,m_height,pair.second);
 		m_imageBuffers[pair.first] = imgBuf;
 	}
 }

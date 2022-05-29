@@ -2108,22 +2108,24 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 						break;
 					}
 
-					worker.SetResultMessage("Baking margin...");
+					if(renderMode == Scene::RenderMode::BakeDiffuseLighting)
+					{
+						worker.SetResultMessage("Baking margin...");
 
-					resultImgBuf->Convert(uimg::Format::RGBA_FLOAT);
-					unirender::baking::ImBuf ibuf {};
-					ibuf.x = resultImgBuf->GetWidth();
-					ibuf.y = resultImgBuf->GetHeight();
-					ibuf.rect = resultImgBuf;
+						resultImgBuf->Convert(uimg::Format::RGBA_FLOAT);
+						unirender::baking::ImBuf ibuf {};
+						ibuf.x = resultImgBuf->GetWidth();
+						ibuf.y = resultImgBuf->GetHeight();
+						ibuf.rect = resultImgBuf;
 
-					// Apply margin
-					// TODO: Margin only required for certain bake types?
-					auto numPixels = resultImgBuf->GetPixelCount();
-					std::vector<uint8_t> mask_buffer {};
-					mask_buffer.resize(numPixels);
-					constexpr auto margin = 16u;
-					baking::RE_bake_mask_fill(m_bakeData->pixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
-					RE_bake_margin(&ibuf, mask_buffer, margin);
+						// Apply margin
+						auto numPixels = resultImgBuf->GetPixelCount();
+						std::vector<uint8_t> mask_buffer {};
+						mask_buffer.resize(numPixels);
+						constexpr auto margin = 16u;
+						baking::RE_bake_mask_fill(m_bakeData->pixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
+						RE_bake_margin(&ibuf, mask_buffer, margin);
+					}
 				}
 				else
 				{
@@ -2149,6 +2151,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 
 				if(UpdateStereoEye(worker,stage,eyeStage))
 				{
+					GetOutputDriver()->Reset();
 					worker.Start(); // Lighting stage for the left eye is triggered by the user, but we have to start it manually for the right eye
 					return RenderStageResult::Continue;
 				}
@@ -2867,9 +2870,24 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	{
 		if(pair.first == OUTPUT_COLOR)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_COLOR});
-			pass->set_type(ccl::PASS_COMBINED);
+			switch(m_scene->GetRenderMode())
+			{
+			case Scene::RenderMode::BakeDiffuseLighting:
+			{
+				auto *pass = scene.create_node<ccl::Pass>();
+				pass->set_name(ccl::ustring{OUTPUT_COLOR});
+				pass->set_type(ccl::PASS_DIFFUSE);
+				pass->set_include_albedo(false);
+				break;
+			}
+			default:
+			{
+				auto *pass = scene.create_node<ccl::Pass>();
+				pass->set_name(ccl::ustring{OUTPUT_COLOR});
+				pass->set_type(ccl::PASS_COMBINED);
+				break;
+			}
+			}
 		}
 		else if(pair.first == OUTPUT_ALBEDO)
 		{

@@ -282,6 +282,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 		sessionParams.shadingsystem = ccl::SHADINGSYSTEM_SVM;*/
 	}
 #endif
+
 	return sessionParams;
 }
 
@@ -385,6 +386,21 @@ void unirender::cycles::Renderer::InitializeSession(unirender::Scene &scene,cons
 {
 	ccl::SceneParams sceneParams {};
 	sceneParams.shadingsystem = ccl::SHADINGSYSTEM_SVM;
+
+#if 0
+	// Debug values
+	sceneParams.shadingsystem = ccl::SHADINGSYSTEM_SVM;
+	sceneParams.bvh_type = ccl::BVH_TYPE_STATIC;
+	sceneParams.use_bvh_spatial_split = false;
+	sceneParams.use_bvh_compact_structure = true;
+	sceneParams.use_bvh_unaligned_nodes = true;
+	sceneParams.num_bvh_time_steps = 0;
+	sceneParams.hair_subdivisions = 2;
+	sceneParams.hair_shape = ccl::CURVE_RIBBON;
+	sceneParams.texture_limit = 0;
+	sceneParams.bvh_layout = ccl::BVH_LAYOUT_EMBREE;
+	sceneParams.background = true;
+#endif
 
 	auto sessionParams = GetSessionParameters(scene,devInfo);
 	m_cclSession = std::make_unique<ccl::Session>(sessionParams,sceneParams);
@@ -747,8 +763,99 @@ void unirender::cycles::Renderer::SyncCamera(const unirender::Camera &cam,bool u
 	std::cout<<std::endl;
 	//
 
+#if 0
+	// Debug values
+	cclCam.viewplane.left = -1.77777779;
+	cclCam.viewplane.right = 1.77777779;
+	cclCam.viewplane.bottom = -1.00000000;
+	cclCam.viewplane.top = 1.00000000;
+
+	/* clipping distances */
+	cclCam.set_nearclip(0.100000001);
+	cclCam.set_farclip(100.000000);
+
+	/* type */
+	cclCam.set_camera_type(ccl::CAMERA_PERSPECTIVE);
+
+	/* panorama */
+	cclCam.set_panorama_type(ccl::PANORAMA_FISHEYE_EQUISOLID);
+	cclCam.set_fisheye_fov(3.14159274);
+	cclCam.set_fisheye_lens(10.5000000);
+	cclCam.set_latitude_min(-1.57079637);
+	cclCam.set_latitude_max(1.57079637);
+
+	cclCam.set_fisheye_polynomial_k0(-1.17351437e-05);
+	cclCam.set_fisheye_polynomial_k1(-0.0199887361);
+	cclCam.set_fisheye_polynomial_k2(-3.35253230e-06);
+	cclCam.set_fisheye_polynomial_k3(3.09927532e-06);
+	cclCam.set_fisheye_polynomial_k4(-2.60646473e-08);
+
+	cclCam.set_longitude_min(-3.14159274);
+	cclCam.set_longitude_max(3.14159274);
+
+	/* panorama stereo */
+	cclCam.set_interocular_distance(0.0649999976);
+	cclCam.set_convergence_distance(1.94999993);
+	cclCam.set_use_spherical_stereo(false);
+
+	/*if (cclCam.get_use_spherical_stereo()) {
+	if (strcmp(viewname, "left") == 0)
+	cclCam.set_stereo_eye(Camera::STEREO_LEFT);
+	else if (strcmp(viewname, "right") == 0)
+	cclCam.set_stereo_eye(Camera::STEREO_RIGHT);
+	else
+	cclCam.set_stereo_eye(Camera::STEREO_NONE);
+	}*/
+
+	cclCam.set_use_pole_merge(false);
+	cclCam.set_pole_merge_angle_from(1.04719758);
+	cclCam.set_pole_merge_angle_to(1.30899692);
+
+	/* anamorphic lens bokeh */
+	cclCam.set_aperture_ratio(1.00000000);
+
+	/* perspective */
+	cclCam.set_fov(2.0f * atanf((0.5f * 36.0000000) / 50.0000000 / 1.77777779));
+	cclCam.set_focaldistance(0.00000000);
+	cclCam.set_aperturesize(0.00000000);
+	cclCam.set_blades(0);
+	cclCam.set_bladesrotation(0.00000000);
+
+	/* transform */
+
+	//array<Transform> motion;
+	//motion.resize(bcclCam.motion_steps, cclCam.get_matrix());
+	//cclCam.set_motion(motion);
+	cclCam.set_use_perspective_motion(false);
+
+	cclCam.set_shuttertime(0.500000000);
+	cclCam.set_fov_pre(cclCam.get_fov());
+	cclCam.set_fov_post(cclCam.get_fov());
+	cclCam.set_motion_position(ccl::MOTION_POSITION_CENTER);
+
+	cclCam.set_rolling_shutter_type(ccl::Camera::ROLLING_SHUTTER_NONE);
+	cclCam.set_rolling_shutter_duration(0.100000001);
+
+	//cclCam.set_shutter_curve(bcclCam.shutter_curve);
+
+	/* border */
+	cclCam.set_border_left(0.00000000);
+	cclCam.set_border_right(1);
+	cclCam.set_border_top(1);
+	cclCam.set_border_bottom(0);
+
+	cclCam.set_viewport_camera_border_left(0);
+	cclCam.set_viewport_camera_border_right(1);
+	cclCam.set_viewport_camera_border_top(1);
+	cclCam.set_viewport_camera_border_bottom(0);
+
+	//bcclCam.offscreen_dicing_scale = RNA_float_get(cscene, "offscreen_dicing_scale");
+	cclCam.set_offscreen_dicing_scale(1);
+#endif
+
 	cclCam.need_flags_update = true;
 	cclCam.update(&**this);
+	*(*this)->dicing_camera = cclCam;
 }
 
 void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const unirender::Light &light,bool update)
@@ -895,8 +1002,8 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 	auto desc = GroupNodeDesc::Create(scene.GetShaderNodeManager());
 	auto &outputNode = desc->AddNode(NODE_OUTPUT);
 	auto &nodeEmission = desc->AddNode(NODE_EMISSION);
-	//nodeEmission->SetInputArgument<float>("strength",watt);
-	//nodeEmission->SetInputArgument<ccl::float3>("color",ccl::float3{1.f,1.f,1.f});
+	nodeEmission.SetProperty(unirender::nodes::emission::IN_STRENGTH,1.f);
+	nodeEmission.SetProperty(unirender::nodes::emission::IN_COLOR,Vector3{1.f,1.f,1.f});
 	desc->Link(nodeEmission.GetOutputSocket("emission"),outputNode.GetInputSocket("surface"));
 	cclLight->set_shader(**CCLShader::Create(*this,*desc));
 }
@@ -1627,6 +1734,8 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		m_cclScene->integrator->set_use_indirect_light(false);
 		m_cclScene->background->set_transparent(true);
 	}
+	if(scene.GetRenderMode() == Scene::RenderMode::BakeDiffuseLighting || scene.GetRenderMode() == Scene::RenderMode::BakeNormals)
+		m_cclScene->background->set_transparent(true);
 
 	auto *bakeTarget = m_scene->GetBakeTargetName();
 	if(bakeTarget)
@@ -2827,6 +2936,8 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 		integrator.set_adaptive_min_samples(0);
 	}
 
+#if 0
+	// Debug values
 	integrator.set_sample_clamp_direct(0.f);
 	integrator.set_sample_clamp_indirect(0.f);
 	integrator.set_motion_blur(false);
@@ -2844,6 +2955,55 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	//integrator.set_volume_samples(1);
 
 	integrator.set_ao_bounces(0);
+
+
+
+  integrator.set_min_bounce(0);
+  integrator.set_max_bounce(12);
+
+  integrator.set_max_diffuse_bounce(4);
+  integrator.set_max_glossy_bounce(4);
+  integrator.set_max_transmission_bounce(12);
+  integrator.set_max_volume_bounce(0);
+
+  integrator.set_transparent_min_bounce(0);
+  integrator.set_transparent_max_bounce(8);
+
+  integrator.set_volume_max_steps(1024);
+  integrator.set_volume_step_rate(1);
+
+  integrator.set_caustics_reflective(true);
+  integrator.set_caustics_refractive(true);
+  integrator.set_filter_glossy(1);
+
+  integrator.set_sample_clamp_direct(0);
+  integrator.set_sample_clamp_indirect(10);
+  integrator.set_motion_blur(false);
+
+  integrator.set_light_sampling_threshold(0.00999999978);
+
+  integrator.set_sampling_pattern(ccl::SAMPLING_PATTERN_PMJ);
+
+    integrator.set_use_adaptive_sampling(true);
+    integrator.set_adaptive_threshold(0.00999999978);
+    integrator.set_adaptive_min_samples(0);
+
+  integrator.set_scrambling_distance(1);
+
+      integrator.set_ao_bounces(0);
+
+  integrator.set_use_denoise(true);
+
+  /* Only update denoiser parameters if the denoiser is actually used. This allows to tweak
+   * denoiser parameters before enabling it without render resetting on every change. The downside
+   * is that the interface and the integrator are technically out of sync. */
+
+    integrator.set_denoiser_type(ccl::DENOISER_OPENIMAGEDENOISE);
+    integrator.set_denoise_start_sample(0);
+    integrator.set_use_denoise_pass_albedo(true);
+    integrator.set_use_denoise_pass_normal(true);
+    integrator.set_denoiser_prefilter(ccl::DENOISER_PREFILTER_ACCURATE);
+#endif
 	integrator.tag_modified();
 
 	// Film
@@ -2860,6 +3020,17 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 
 	film.set_cryptomatte_depth(3);
 	film.set_cryptomatte_passes(ccl::CRYPT_NONE);
+
+#if 0
+	// Debug values
+	film.set_exposure(0.800000012);
+	film.set_filter_type(ccl::FILTER_BLACKMAN_HARRIS);
+	film.set_filter_width(1.50000000);
+	film.set_mist_start(5.00000000);
+	film.set_mist_depth(25.0000000);
+	film.set_mist_falloff(2.0f);
+	film.set_use_approximate_shadow_catcher(true);
+#endif
 
 	session.params.pixel_size = 1;
 	session.params.threads = 0;

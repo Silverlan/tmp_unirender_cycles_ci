@@ -20,6 +20,7 @@
 #include "util_raytracing/color_management.hpp"
 #include "util_raytracing/denoise.hpp"
 #include <sharedutils/util_hair.hpp>
+#include <sharedutils/util_baking.hpp>
 #include <util_ocio.hpp>
 #include <scene/light.h>
 #include <scene/camera.h>
@@ -2222,18 +2223,14 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 						worker.SetResultMessage("Baking margin...");
 
 						resultImgBuf->Convert(uimg::Format::RGBA_FLOAT);
-						unirender::baking::ImBuf ibuf {};
-						ibuf.x = resultImgBuf->GetWidth();
-						ibuf.y = resultImgBuf->GetHeight();
-						ibuf.rect = resultImgBuf;
 
 						// Apply margin
 						auto numPixels = resultImgBuf->GetPixelCount();
 						std::vector<uint8_t> mask_buffer {};
 						mask_buffer.resize(numPixels);
 						constexpr auto margin = 16u;
-						baking::RE_bake_mask_fill(m_bakeData->pixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
-						RE_bake_margin(&ibuf, mask_buffer, margin);
+						util::baking::fill_bake_mask(m_bakeData->pixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
+						uimg::bake_margin(*resultImgBuf, mask_buffer, margin);
 					}
 				}
 				else
@@ -2494,19 +2491,19 @@ bool unirender::cycles::Renderer::InitializeBakingData()
 	auto *aoTarget = o ? FindCclObject(*o) : nullptr;
 	if(aoTarget == nullptr)
 		return false;
-	m_bakeData = std::make_unique<baking::BakeData>();
+	m_bakeData = std::make_unique<util::baking::ImageBakeData>();
 	m_bakeData->width = imgWidth;
 	m_bakeData->height = imgHeight;
 	auto &pixelArray = m_bakeData->pixels;
 	pixelArray.resize(numPixels);
 	auto bakeLightmaps = (m_renderMode == Scene::RenderMode::BakeDiffuseLighting);
 
-	unirender::baking::prepare_bake_data(*this,*o,pixelArray.data(),numPixels,imgWidth,imgHeight,bakeLightmaps);
+	baking::prepare_bake_data(*this,*o,pixelArray.data(),numPixels,imgWidth,imgHeight,bakeLightmaps);
 
 	auto objectId = aoTarget ? FindCCLObjectId(*aoTarget) : std::optional<uint32_t>{};
 	if(!objectId.has_value())
 		return false;
-	m_bakeData->object_id = *objectId;
+	m_bakeData->objectId = *objectId;
 	return true;
 }
 void unirender::cycles::Renderer::StartTextureBaking(RenderWorker &worker)

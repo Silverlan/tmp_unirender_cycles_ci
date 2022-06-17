@@ -20,10 +20,10 @@
 #include <vector>
 
 namespace uimg {class ImageBuffer;};
+namespace util::baking {struct ImageBakeData;};
 namespace unirender
 {
 	class TileManager;
-	namespace baking {struct BakeData;};
 };
 namespace unirender::cycles
 {
@@ -108,12 +108,12 @@ namespace unirender::cycles
 		* true if any data was read. */
 		virtual bool read_render_tile(const Tile & /* tile */) override;
 
-		void SetBakeData(const baking::BakeData &bakeData);
+		void SetBakeData(const util::baking::ImageBakeData &bakeData);
 	private:
 		void DebugDumpImages();
 		std::vector<Vector4> m_tileData;
 		std::unordered_map<std::string,std::shared_ptr<uimg::ImageBuffer>> m_imageBuffers;
-		const baking::BakeData *m_bakeData = nullptr;
+		const util::baking::ImageBakeData *m_bakeData = nullptr;
 		std::vector<std::pair<std::string,uimg::Format>> m_passes;
 	};
 };

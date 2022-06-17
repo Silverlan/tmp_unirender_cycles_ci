@@ -15,10 +15,10 @@
 #include <cinttypes>
 #include <atomic>
 
+namespace util::baking {struct ImageBakeData;}
 namespace unirender
 {
 	class Scene; namespace cycles {class Renderer;};
-	namespace baking {struct BakeData;};
 };
 namespace unirender::cycles
 {
@@ -161,7 +161,7 @@ namespace unirender::cycles
 		StateFlags m_stateFlags = StateFlags::None;
 		std::mutex m_cancelMutex;
 		bool m_cancelled = false;
-		std::unique_ptr<baking::BakeData> m_bakeData = nullptr;
+		std::unique_ptr<util::baking::ImageBakeData> m_bakeData = nullptr;
 
 		ccl::SessionParams m_sessionParams;
 		ccl::BufferParams m_bufferParams;

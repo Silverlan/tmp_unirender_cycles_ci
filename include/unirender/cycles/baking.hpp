@@ -22,6 +22,8 @@
 #include <cinttypes>
 #include <vector>
 
+namespace util::baking {struct BakePixel;};
+
 namespace unirender
 {
 	class Object;
@@ -29,40 +31,7 @@ namespace unirender
 	namespace cycles {class Renderer;};
 	namespace baking
 	{
-		// Note: These are various utility functions from the blender repository, which are required
-		// for baking with cycles.
-		struct BakePixel
-		{
-			int32_t primitiveId;
-			int32_t objectId;
-			int32_t seed;
-			std::array<float,2> uv;
-			float du_dx,du_dy;
-			float dv_dx,dv_dy;
-		};
-
-		struct BakeData
-		{
-			uint32_t width = 0;
-			uint32_t height = 0;
-			std::vector<BakePixel> pixels;
-			uint32_t object_id = 0;
-		};
-
-		typedef struct ImBuf {
-			int x, y;
-			std::shared_ptr<uimg::ImageBuffer> rect;
-		} ImBuf;
-
-		void prepare_bake_data(const cycles::Renderer &renderer,Object &o,BakePixel *pixelArray,uint32_t numPixels,uint32_t imgWidth,uint32_t imgHeight,bool useLightmapUvs=false);
-		/*void populate_bake_data(ccl::BakeData *data,
-			const int object_id,
-			BakePixel *pixel_array,
-			const int num_pixels);*/
-		unsigned char unit_float_to_uchar_clamp(float val);
-		unsigned short unit_float_to_ushort_clamp(float val);
-		void RE_bake_mask_fill(const std::vector<BakePixel> &pixel_array, const size_t num_pixels, char *mask);
-		void RE_bake_margin(ImBuf *ibuf, std::vector<uint8_t> &mask, const int margin);
+		void prepare_bake_data(const cycles::Renderer &renderer,Object &o,util::baking::BakePixel *pixelArray,uint32_t numPixels,uint32_t imgWidth,uint32_t imgHeight,bool useLightmapUvs=false);
 	};
 }
 

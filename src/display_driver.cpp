@@ -6,13 +6,13 @@
 */
 
 #include "unirender/cycles/display_driver.hpp"
-#include "unirender/cycles/baking.hpp"
 #include <util_raytracing/tilemanager.hpp>
 #include <util_raytracing/denoise.hpp>
 #include <util_image.hpp>
 #include <mathutil/color.h>
 #include <sharedutils/util_string.h>
 #include <sharedutils/util.h>
+#include <sharedutils/util_baking.hpp>
 #include <fsys/filesystem.h>
 #include <fsys/ifile.hpp>
 #include <util_image_buffer.hpp>
@@ -269,7 +269,7 @@ static float intToFloat(int32_t i)
 	u.i = i;
 	return u.f;
 }
-void unirender::cycles::OutputDriver::SetBakeData(const baking::BakeData &bakeData) {m_bakeData = &bakeData;}
+void unirender::cycles::OutputDriver::SetBakeData(const util::baking::ImageBakeData &bakeData) {m_bakeData = &bakeData;}
 bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
 {
 	if(!m_bakeData)
@@ -292,11 +292,11 @@ bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
 		float *differential = differentialData.data() + offset;
 
 		size_t bake_offset = (y + ty) * bakeData.width + x;
-		const baking::BakePixel *bake_pixel = bakeData.pixels.data() + bake_offset;
+		const auto *bake_pixel = bakeData.pixels.data() + bake_offset;
 
 		for (int tx = 0; tx < w; tx++)
 		{
-			if (bake_pixel->objectId != bakeData.object_id)
+			if (bake_pixel->objectId != bakeData.objectId)
 			{
 				primitive[0] = intToFloat(-1);
 				primitive[1] = intToFloat(-1);

@@ -11,11 +11,11 @@
 #include <util_raytracing/object.hpp>
 #include <util_raytracing/renderer.hpp>
 #include <util_raytracing/scene.hpp>
+#include <sharedutils/util_baking.hpp>
 #include <session/session.h>
 #include <cinttypes>
 #include <atomic>
 
-namespace util::baking {struct ImageBakeData;}
 namespace unirender
 {
 	class Scene; namespace cycles {class Renderer;};
@@ -64,7 +64,7 @@ namespace unirender::cycles
 		virtual void Restart() override;
 		virtual bool ShouldUseProgressiveFloatFormat() const override {return false;}
 		virtual std::optional<std::string> SaveRenderPreview(const std::string &path,std::string &outErr) const override;
-		virtual util::ParallelJob<std::shared_ptr<uimg::ImageBuffer>> StartRender() override;
+		virtual util::ParallelJob<uimg::ImageLayerSet> StartRender() override;
 
 		virtual bool BeginSceneEdit() override;
 		virtual bool EndSceneEdit() override;
@@ -161,7 +161,9 @@ namespace unirender::cycles
 		StateFlags m_stateFlags = StateFlags::None;
 		std::mutex m_cancelMutex;
 		bool m_cancelled = false;
-		std::unique_ptr<util::baking::ImageBakeData> m_bakeData = nullptr;
+
+		std::unique_ptr<util::baking::BakeDataView> m_bakeData = nullptr;
+		std::vector<util::baking::BakePixel> m_bakePixels;
 
 		ccl::SessionParams m_sessionParams;
 		ccl::BufferParams m_bufferParams;

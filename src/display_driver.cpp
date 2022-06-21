@@ -269,7 +269,7 @@ static float intToFloat(int32_t i)
 	u.i = i;
 	return u.f;
 }
-void unirender::cycles::OutputDriver::SetBakeData(const util::baking::ImageBakeData &bakeData) {m_bakeData = &bakeData;}
+void unirender::cycles::OutputDriver::SetBakeData(const util::baking::BakeDataView &bakeData) {m_bakeData = &bakeData;}
 bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
 {
 	if(!m_bakeData)
@@ -291,8 +291,8 @@ bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
 		float *primitive = primitiveData.data() + offset;
 		float *differential = differentialData.data() + offset;
 
-		size_t bake_offset = (y + ty) * bakeData.width + x;
-		const auto *bake_pixel = bakeData.pixels.data() + bake_offset;
+		size_t bake_offset = (y + ty) * bakeData.bakeImageWidth + x;
+		const auto *bake_pixel = bakeData.bakePixels + bake_offset;
 
 		for (int tx = 0; tx < w; tx++)
 		{

@@ -251,6 +251,7 @@ ccl::SessionParams unirender::cycles::Renderer::GetSessionParameters(const unire
 		case unirender::Scene::RenderMode::BakeAmbientOcclusion:
 		case unirender::Scene::RenderMode::BakeNormals:
 		case unirender::Scene::RenderMode::BakeDiffuseLighting:
+		case unirender::Scene::RenderMode::BakeDiffuseLightingSeparate:
 			sessionParams.samples = 1'225u;
 			break;
 		default:
@@ -1055,7 +1056,7 @@ void unirender::cycles::Renderer::ApplyPostProcessing(uimg::ImageBuffer &imgBuff
 		imgBuffer.FlipHorizontally();
 
 	// We will also always have to flip the image vertically, since the data seems to be bottom->top and we need it top->bottom
-	if(renderMode != Scene::RenderMode::BakeDiffuseLighting)
+	if(Scene::IsLightmapRenderMode(renderMode))
 		imgBuffer.FlipVertically();
 	imgBuffer.ClearAlpha();
 }
@@ -1539,8 +1540,14 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		AddOutput(OUTPUT_AO);
 		break;
 	case unirender::Scene::RenderMode::BakeNormals:
-	case unirender::Scene::RenderMode::BakeDiffuseLighting:
 		AddOutput(OUTPUT_COLOR);
+		break;
+	case unirender::Scene::RenderMode::BakeDiffuseLighting:
+		AddOutput(OUTPUT_DIFFUSE);
+		break;
+	case unirender::Scene::RenderMode::BakeDiffuseLightingSeparate:
+		AddOutput(OUTPUT_DIFFUSE_DIRECT);
+		AddOutput(OUTPUT_DIFFUSE_INDIRECT);
 		break;
 	case unirender::Scene::RenderMode::RenderImage:
 	{
@@ -1735,7 +1742,10 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		m_cclScene->integrator->set_use_indirect_light(false);
 		m_cclScene->background->set_transparent(true);
 	}
-	if(scene.GetRenderMode() == Scene::RenderMode::BakeDiffuseLighting || scene.GetRenderMode() == Scene::RenderMode::BakeNormals)
+	if(
+		Scene::IsLightmapRenderMode(scene.GetRenderMode()) ||
+		scene.GetRenderMode() == Scene::RenderMode::BakeNormals
+	)
 		m_cclScene->background->set_transparent(true);
 
 	auto *bakeTarget = m_scene->GetBakeTargetName();
@@ -2213,24 +2223,39 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 					case Scene::RenderMode::BakeAmbientOcclusion:
 						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_AO);
 						break;
+					case Scene::RenderMode::BakeDiffuseLighting:
+						GetResultImageBuffer(OUTPUT_DIFFUSE) = GetOutputDriver()->GetImageBuffer(OUTPUT_DIFFUSE);
+						break;
+					case Scene::RenderMode::BakeDiffuseLightingSeparate:
+						GetResultImageBuffer(OUTPUT_DIFFUSE_DIRECT) = GetOutputDriver()->GetImageBuffer(OUTPUT_DIFFUSE_DIRECT);
+						GetResultImageBuffer(OUTPUT_DIFFUSE_INDIRECT) = GetOutputDriver()->GetImageBuffer(OUTPUT_DIFFUSE_INDIRECT);
+						break;
 					default:
 						resultImgBuf = GetOutputDriver()->GetImageBuffer(OUTPUT_COLOR);
 						break;
 					}
 
-					if(renderMode == Scene::RenderMode::BakeDiffuseLighting)
+					if(Scene::IsRenderSceneMode(renderMode))
 					{
 						worker.SetResultMessage("Baking margin...");
 
-						resultImgBuf->Convert(uimg::Format::RGBA_FLOAT);
+						for(auto &pair : m_resultImageBuffers)
+						{
+							for(auto &imgBuf : pair.second)
+							{
+								if(!imgBuf)
+									continue;
+								imgBuf->Convert(uimg::Format::RGBA_FLOAT);
 
-						// Apply margin
-						auto numPixels = resultImgBuf->GetPixelCount();
-						std::vector<uint8_t> mask_buffer {};
-						mask_buffer.resize(numPixels);
-						constexpr auto margin = 16u;
-						util::baking::fill_bake_mask(m_bakeData->pixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
-						uimg::bake_margin(*resultImgBuf, mask_buffer, margin);
+								// Apply margin
+								auto numPixels = imgBuf->GetPixelCount();
+								std::vector<uint8_t> mask_buffer {};
+								mask_buffer.resize(numPixels);
+								constexpr auto margin = 16u;
+								util::baking::fill_bake_mask(m_bakePixels, numPixels, reinterpret_cast<char*>(mask_buffer.data()));
+								uimg::bake_margin(*imgBuf, mask_buffer, margin);
+							}
+						}
 					}
 				}
 				else
@@ -2251,8 +2276,16 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 						break;
 					}
 				}
-
-				resultImgBuf->ToHDR();
+				
+				for(auto &pair : m_resultImageBuffers)
+				{
+					for(auto &imgBuf : pair.second)
+					{
+						if(!imgBuf)
+							continue;
+						imgBuf->ToHDR();
+					}
+				}
 				// ApplyPostProcessing(*resultImageBuffer,m_renderMode);
 
 				if(UpdateStereoEye(worker,stage,eyeStage))
@@ -2491,12 +2524,13 @@ bool unirender::cycles::Renderer::InitializeBakingData()
 	auto *aoTarget = o ? FindCclObject(*o) : nullptr;
 	if(aoTarget == nullptr)
 		return false;
-	m_bakeData = std::make_unique<util::baking::ImageBakeData>();
-	m_bakeData->width = imgWidth;
-	m_bakeData->height = imgHeight;
-	auto &pixelArray = m_bakeData->pixels;
+	m_bakeData = std::make_unique<util::baking::BakeDataView>();
+	m_bakeData->bakeImageWidth = imgWidth;
+	m_bakeData->bakeImageHeight = imgHeight;
+	auto &pixelArray = m_bakePixels;
 	pixelArray.resize(numPixels);
-	auto bakeLightmaps = (m_renderMode == Scene::RenderMode::BakeDiffuseLighting);
+	m_bakeData->bakePixels = m_bakePixels.data();
+	auto bakeLightmaps = Scene::IsLightmapRenderMode(m_renderMode);
 
 	baking::prepare_bake_data(*this,*o,pixelArray.data(),numPixels,imgWidth,imgHeight,bakeLightmaps);
 
@@ -3038,24 +3072,31 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	{
 		if(pair.first == OUTPUT_COLOR)
 		{
-			switch(m_scene->GetRenderMode())
-			{
-			case Scene::RenderMode::BakeDiffuseLighting:
-			{
-				auto *pass = scene.create_node<ccl::Pass>();
-				pass->set_name(ccl::ustring{OUTPUT_COLOR});
-				pass->set_type(ccl::PASS_DIFFUSE);
-				pass->set_include_albedo(false);
-				break;
-			}
-			default:
-			{
-				auto *pass = scene.create_node<ccl::Pass>();
-				pass->set_name(ccl::ustring{OUTPUT_COLOR});
-				pass->set_type(ccl::PASS_COMBINED);
-				break;
-			}
-			}
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_COLOR});
+			pass->set_type(ccl::PASS_COMBINED);
+			break;
+		}
+		else if(pair.first == OUTPUT_DIFFUSE)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_DIFFUSE});
+			pass->set_type(ccl::PASS_DIFFUSE);
+			pass->set_include_albedo(false);
+		}
+		else if(pair.first == OUTPUT_DIFFUSE_DIRECT)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_DIFFUSE_DIRECT});
+			pass->set_type(ccl::PASS_DIFFUSE_DIRECT);
+			pass->set_include_albedo(false);
+		}
+		else if(pair.first == OUTPUT_DIFFUSE_INDIRECT)
+		{
+			auto *pass = scene.create_node<ccl::Pass>();
+			pass->set_name(ccl::ustring{OUTPUT_DIFFUSE_INDIRECT});
+			pass->set_type(ccl::PASS_DIFFUSE_INDIRECT);
+			pass->set_include_albedo(false);
 		}
 		else if(pair.first == OUTPUT_ALBEDO)
 		{
@@ -3224,7 +3265,7 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	cam.tag_update();*/
 }
 
-util::ParallelJob<std::shared_ptr<uimg::ImageBuffer>> unirender::cycles::Renderer::StartRender()
+util::ParallelJob<uimg::ImageLayerSet> unirender::cycles::Renderer::StartRender()
 {
 	auto job = util::create_parallel_job<RenderWorker>(*this);
 	auto &worker = static_cast<RenderWorker&>(job.GetWorker());

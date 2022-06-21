@@ -52,20 +52,16 @@ void unirender::baking::prepare_bake_data(
 
 	util::baking::BakeDataView bd;
 	bd.bakePixels = pixelArray;
-	uint32_t numBakeImages = 1u;
-	bd.span.resize(numBakeImages);
 
-	for(auto &zspan : bd.span)
-	{
-		zspan.rectx = imgWidth;
-		zspan.recty = imgHeight;
+	auto &zspan = bd.span;
+	zspan.rectx = imgWidth;
+	zspan.recty = imgHeight;
 
-		zspan.span1.resize(zspan.recty);
-		zspan.span2.resize(zspan.recty);
-	}
+	zspan.span1.resize(zspan.recty);
+	zspan.span2.resize(zspan.recty);
 
 	util::baking::prepare_bake_pixel_data(
 		bd,*objId,meshInterface,numTris,
-		pixelArray,numPixels,imgWidth,imgHeight
+		imgWidth,imgHeight
 	);
 }

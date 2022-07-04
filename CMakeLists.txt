@@ -109,8 +109,15 @@ add_def(OIDN_STATIC_LIB)
 add_def(WITH_CYCLES_LOGGING)
 add_def(GLOG_NO_ABBREVIATED_SEVERITIES)
 add_def(GOOGLE_GLOG_DLL_DECL=__declspec\(dllexport\))
-# add_def(CCL_NAMESPACE_BEGIN=namespace/ ccl/ {)
-# add_def(CCL_NAMESPACE_END=})
+add_def("CCL_NAMESPACE_BEGIN=namespace ccl {")
+add_def("CCL_NAMESPACE_END=}")
+
+link_external_library(openexr_imath)
+add_external_library(openexr_iex)
+add_external_library(openexr_ilmthread)
+add_external_library(openexr)
+add_external_library(openexr_core)
+add_external_library(openexr_util)
 
 ##### CONFIGURATION #####
 
@@ -329,24 +336,32 @@ if(WIN32)
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openimagedenoise/lib/dnnl.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opensubdiv/lib/osdCPU.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opensubdiv/lib/osdGPU.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_filesystem-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_regex-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_system-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_thread-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_date_time-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_wave-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_chrono-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_atomic-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_serialization-vc141-mt-x64-1_73.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/Half_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_filesystem-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_regex-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_system-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_thread-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_date_time-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_wave-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_chrono-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_atomic-vc142-mt-x64-1_78.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/boost/lib/libboost_serialization-vc142-mt-x64-1_78.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/Iex_s.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/IlmThread_s.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/Imath_s.lib
-		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/IlmImf_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/imath/lib/Imath_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/OpenEXR_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/OpenEXRCore_s.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/openexr/lib/OpenEXRUtil_s.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/OpenColorIO.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/libexpatMD.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/libyaml-cpp.lib
 		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/opencolorio/lib/pystring.lib
+
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/webp/lib/webp.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/webp/lib/webpdemux.lib
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/webp/lib/webpmux.lib
+
+
+		${DEPENDENCY_CYCLES_DEPENDENCIES_LOCATION}/alembic/lib/Alembic.lib
 
 		${DEPENDENCY_CYCLES_UTIL_LIBRARY}
 		${DEPENDENCY_CYCLES_DEVICE_LIBRARY}

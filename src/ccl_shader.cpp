@@ -18,7 +18,7 @@
 #include <scene/shader_nodes.h>
 #include <OpenImageIO/ustring.h>
 
-#pragma optimize("",off)
+
 ccl::NodeMathType unirender::cycles::to_ccl_type(unirender::nodes::math::MathType type)
 {
 	switch(type)
@@ -946,4 +946,3 @@ ccl::ShaderOutput *unirender::CCLShader::FindOutput(ccl::ShaderNode &node,const 
 }
 
 std::string unirender::CCLShader::GetCurrentInternalNodeName() const {return "internal_" +std::to_string(m_cclGraph.nodes.size());}
-#pragma optimize("",on)

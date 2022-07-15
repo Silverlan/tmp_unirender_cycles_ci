@@ -52,7 +52,7 @@
 #include <Shlobj.h>
 #endif
 
-#pragma optimize("",off)
+
 static std::optional<std::string> KERNEL_PATH {};
 void unirender::Scene::SetKernelPath(const std::string &kernelPath) {KERNEL_PATH = kernelPath;}
 int cycles_standalone_test(int argc, const char **argv,bool initPaths);
@@ -3319,4 +3319,3 @@ extern "C" {
 		return outRenderer != nullptr;
 	}
 };
-#pragma optimize("",on)

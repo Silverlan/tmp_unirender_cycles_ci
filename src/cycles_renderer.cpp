@@ -1007,7 +1007,10 @@ void unirender::cycles::Renderer::SyncLight(unirender::Scene &scene,const uniren
 	nodeEmission.SetProperty(unirender::nodes::emission::IN_STRENGTH,1.f);
 	nodeEmission.SetProperty(unirender::nodes::emission::IN_COLOR,Vector3{1.f,1.f,1.f});
 	desc->Link(nodeEmission.GetOutputSocket("emission"),outputNode.GetInputSocket("surface"));
-	cclLight->set_shader(**CCLShader::Create(*this,*desc));
+
+	auto shader = CCLShader::Create(*this,*desc);
+	cclLight->set_shader(**shader);
+	m_lightToShader[&light] = shader;
 }
 
 ccl::BufferParams unirender::cycles::Renderer::GetBufferParameters() const
@@ -1436,6 +1439,20 @@ void unirender::cycles::Renderer::PopulateDebugScene()
 
 bool unirender::cycles::Renderer::BeginSceneEdit() {return true;}
 bool unirender::cycles::Renderer::EndSceneEdit() {return true;}
+bool unirender::cycles::Renderer::AddLiveActor(unirender::WorldObject &actor)
+{
+	auto *pLight = dynamic_cast<unirender::Light*>(&actor);
+	if(!pLight)
+		return false;
+	GetScene().AddLight(*pLight);
+	SyncLight(*m_scene,*pLight);
+	auto it = m_lightToShader.find(pLight);
+	if(it == m_lightToShader.end())
+		return false;
+	AddActorToActorMap(actor);
+	it->second->Finalize(*m_scene);
+	return true;
+}
 bool unirender::cycles::Renderer::SyncEditedActor(const util::Uuid &uuid)
 {
 	auto *actor = FindActor(uuid);

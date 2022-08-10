@@ -69,6 +69,7 @@ namespace unirender::cycles
 		virtual bool BeginSceneEdit() override;
 		virtual bool EndSceneEdit() override;
 		virtual bool SyncEditedActor(const util::Uuid &uuid) override;
+		virtual bool AddLiveActor(unirender::WorldObject &actor) override;
 
 		ccl::Object *FindCclObject(const Object &obj);
 		const ccl::Object *FindCclObject(const Object &obj) const {return const_cast<Renderer*>(this)->FindCclObject(obj);}
@@ -157,6 +158,7 @@ namespace unirender::cycles
 		std::unordered_map<const Object*,ccl::Object*> m_objectToCclObject;
 		std::unordered_map<const Mesh*,ccl::Mesh*> m_meshToCcclMesh;
 		std::unordered_map<const Light*,ccl::Light*> m_lightToCclLight;
+		std::unordered_map<const unirender::Light*,std::shared_ptr<CCLShader>> m_lightToShader;
 		std::atomic<uint32_t> m_restartState = 0;
 		StateFlags m_stateFlags = StateFlags::None;
 		std::mutex m_cancelMutex;

@@ -2971,18 +2971,21 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	integrator.set_seed(0);
 	integrator.set_sampling_pattern(ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL);
 
-	auto useAdaptiveSampling = true;
+	auto useAdaptiveSampling = sceneInfo.useAdaptiveSampling;
+	auto adaptiveSamplingThreshold = sceneInfo.adaptiveSamplingThreshold;
+	auto adaptiveMinSamples = sceneInfo.adaptiveMinSamples;
+	integrator.set_adaptive_threshold(sceneInfo.adaptiveSamplingThreshold);
+	integrator.set_adaptive_min_samples(sceneInfo.adaptiveSamplingThreshold);
+
 	apiData.GetFromPath("cycles/useAdaptiveSampling")(useAdaptiveSampling);
 	if(useAdaptiveSampling)
 	{
-		auto adaptiveSamplingThreshold = 0.01f;
-		uint32_t minSamples = 0;
 		apiData.GetFromPath("cycles/adaptiveSamplingThreshold")(adaptiveSamplingThreshold);
-		apiData.GetFromPath("cycles/adaptiveMinSamples")(minSamples);
-		integrator.set_use_adaptive_sampling(true);
-		integrator.set_adaptive_threshold(adaptiveSamplingThreshold);
-		integrator.set_adaptive_min_samples(0);
+		apiData.GetFromPath("cycles/adaptiveMinSamples")(adaptiveMinSamples);
 	}
+	integrator.set_use_adaptive_sampling(useAdaptiveSampling);
+	integrator.set_adaptive_threshold(adaptiveSamplingThreshold);
+	integrator.set_adaptive_min_samples(adaptiveMinSamples);
 
 #if 0
 	// Debug values

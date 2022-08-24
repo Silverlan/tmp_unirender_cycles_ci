@@ -426,7 +426,7 @@ void unirender::cycles::Renderer::InitializeSession(unirender::Scene &scene,cons
 ccl::Object *unirender::cycles::Renderer::FindCclObject(const Object &obj)
 {
 	auto it = m_objectToCclObject.find(&const_cast<Object&>(obj));
-	return (it != m_objectToCclObject.end()) ? it->second : nullptr;
+	return (it != m_objectToCclObject.end()) ? it->second.object : nullptr;
 }
 ccl::Mesh *unirender::cycles::Renderer::FindCclMesh(const Mesh &mesh)
 {
@@ -444,7 +444,8 @@ void unirender::cycles::Renderer::SyncObject(const unirender::Object &obj)
 	auto *cclObj = new ccl::Object{};
 	cclObj->name = obj.GetName();
 	m_cclScene->objects.push_back(cclObj);
-	m_objectToCclObject[&obj] = cclObj;
+	m_objectToCclObject[&obj] = {cclObj,obj.GetPose()};
+	m_uuidToObject[util::uuid_to_string(obj.GetUuid())] = &obj;
 	cclObj->set_tfm(ToCyclesTransform(obj.GetPose()));
 	auto &mesh = obj.GetMesh();
 	cclObj->set_geometry(FindCclMesh(mesh));
@@ -527,6 +528,7 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	auto *cclMesh = new ccl::Mesh{};
 	m_cclScene->geometry.push_back(cclMesh);
 	m_meshToCcclMesh[&mesh] = cclMesh;
+	m_cclMeshToMesh[cclMesh] = &mesh;
 
 	cclMesh->name = mesh.GetName();
 	cclMesh->reserve_mesh(mesh.GetVertexCount(),mesh.GetTriangleCount());
@@ -1462,6 +1464,48 @@ bool unirender::cycles::Renderer::SyncEditedActor(const util::Uuid &uuid)
 		SyncCamera(static_cast<Camera&>(*actor),true);
 	else if(typeid(*actor) == typeid(Light))
 		SyncLight(*m_scene,static_cast<Light&>(*actor),true);
+	else if(typeid(*actor) == typeid(Object))
+	{
+		auto &o = *static_cast<Object*>(actor);
+		auto it = m_uuidToObject.find(util::uuid_to_string(o.GetUuid()));
+		if(it != m_uuidToObject.end())
+		{
+			auto it2 = m_objectToCclObject.find(it->second);
+			if(it2 != m_objectToCclObject.end())
+			{
+				auto &cclObjInfo = it2->second;
+				auto *cclObj = cclObjInfo.object;
+				auto *geo = cclObj->get_geometry();
+				if(geo && geo->transform_applied)
+				{
+					// Transforms have already been applied; Restore original vertices
+					// and apply new transforms
+					auto *cclMesh = static_cast<ccl::Mesh*>(geo);
+					auto *mesh = m_cclMeshToMesh.find(cclMesh)->second;
+					auto &verts = mesh->GetVertices();
+					auto &cclVerts = cclMesh->get_verts();
+					for(auto i=decltype(verts.size()){0u};i<verts.size();++i)
+						cclVerts[i] = ToCyclesPosition(verts[i]);
+
+					auto lastPose = cclObjInfo.lastUpdatePose;
+					cclObjInfo.lastUpdatePose = o.GetPose();
+					auto cclPose = ToCyclesTransform(o.GetPose());
+					geo->apply_transform(cclPose,false);
+					geo->transform_normal = transform_transposed_inverse(cclPose);
+
+					cclObj->set_tfm(ToCyclesTransform(o.GetPose(),true));
+					cclObj->tag_tfm_modified();
+					cclObj->tag_update(m_cclScene);
+				}
+				else
+				{
+					cclObj->set_tfm(ToCyclesTransform(o.GetPose(),true));
+					cclObj->tag_tfm_modified();
+					cclObj->tag_update(m_cclScene);
+				}
+			}
+		}
+	}
 	else
 		return false;
 	umath::set_flag(m_stateFlags,StateFlags::ReloadSessionScheduled);

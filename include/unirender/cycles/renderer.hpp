@@ -155,8 +155,15 @@ namespace unirender::cycles
 		ccl::Scene *m_cclScene = nullptr;
 		std::vector<std::shared_ptr<CCLShader>> m_cclShaders = {};
 		std::unordered_map<const GroupNodeDesc*,size_t> m_shaderCache {};
-		std::unordered_map<const Object*,ccl::Object*> m_objectToCclObject;
+		struct CclObjectInfo
+		{
+			ccl::Object *object = nullptr;
+			umath::ScaledTransform lastUpdatePose {};
+		};
+		std::unordered_map<const Object*,CclObjectInfo> m_objectToCclObject;
+		std::unordered_map<std::string,const Object*> m_uuidToObject;
 		std::unordered_map<const Mesh*,ccl::Mesh*> m_meshToCcclMesh;
+		std::unordered_map<ccl::Mesh*,const Mesh*> m_cclMeshToMesh;
 		std::unordered_map<const Light*,ccl::Light*> m_lightToCclLight;
 		std::unordered_map<const unirender::Light*,std::shared_ptr<CCLShader>> m_lightToShader;
 		std::atomic<uint32_t> m_restartState = 0;

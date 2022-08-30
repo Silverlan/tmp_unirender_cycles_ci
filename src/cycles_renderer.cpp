@@ -1032,8 +1032,20 @@ float unirender::cycles::Renderer::GetProgress() const
 	return m_cclSession->progress.get_progress();
 }
 bool unirender::cycles::Renderer::Stop() {return false;}
-bool unirender::cycles::Renderer::Pause() {return false;}
-bool unirender::cycles::Renderer::Resume() {return false;}
+bool unirender::cycles::Renderer::Pause()
+{
+	if(!m_cclSession)
+		return false;
+	m_cclSession->set_pause(true);
+	return true;
+}
+bool unirender::cycles::Renderer::Resume()
+{
+	if(!m_cclSession)
+		return false;
+	m_cclSession->set_pause(false);
+	return true;
+}
 bool unirender::cycles::Renderer::Suspend() {return false;}
 bool unirender::cycles::Renderer::Export(const std::string &path) {return false;}
 void unirender::cycles::Renderer::Wait()

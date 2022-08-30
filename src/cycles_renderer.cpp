@@ -1797,14 +1797,17 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 	Vector2i tileSize {cam.GetWidth(),cam.GetHeight()};
 	if(m_cclSession->params.use_auto_tile)
 		tileSize = {m_cclSession->params.tile_size,m_cclSession->params.tile_size};
-	auto displayDriver = std::make_unique<DisplayDriver>(m_tileManager,cam.GetWidth(),cam.GetHeight());
-	displayDriver->UpdateTileResolution(tileSize.x,tileSize.y);
-	m_displayDriver = displayDriver.get();
 	auto outputDriver = std::make_unique<OutputDriver>(passes,cam.GetWidth(),cam.GetHeight());
 	if(m_bakeData)
 		static_cast<OutputDriver&>(*outputDriver).SetBakeData(*m_bakeData);
 	m_outputDriver = outputDriver.get();
-	m_cclSession->set_display_driver(std::move(displayDriver));
+	if(IsDisplayDriverEnabled() && !m_bakeData)
+	{
+		auto displayDriver = std::make_unique<DisplayDriver>(m_tileManager,cam.GetWidth(),cam.GetHeight());
+		displayDriver->UpdateTileResolution(tileSize.x,tileSize.y);
+		m_displayDriver = displayDriver.get();
+		m_cclSession->set_display_driver(std::move(displayDriver));
+	}
 	m_cclSession->set_output_driver(std::move(outputDriver));
 
 	//

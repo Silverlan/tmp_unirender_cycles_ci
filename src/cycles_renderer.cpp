@@ -1823,6 +1823,8 @@ bool unirender::cycles::Renderer::Initialize(unirender::Scene &scene,std::string
 		scene.GetRenderMode() == Scene::RenderMode::BakeNormals
 	)
 		m_cclScene->background->set_transparent(true);
+	if(ShouldUseTransparentSky())
+		m_cclScene->background->set_transparent(true);
 
 	auto *bakeTarget = m_scene->GetBakeTargetName();
 	if(bakeTarget)

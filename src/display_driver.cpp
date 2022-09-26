@@ -242,7 +242,7 @@ void unirender::cycles::OutputDriver::write_render_tile(const Tile &tile)
 		auto &imgBuf = pair.second;
 		assert(imgBuf->IsFloatFormat());
 		if(!tile.get_pass_pixels(pair.first,imgBuf->GetChannelCount(),reinterpret_cast<float*>(m_tileData.data())))
-			return;
+			continue;
 		memcpy(imgBuf->GetData(),m_tileData.data(),util::size_of_container(m_tileData));
 	}
 

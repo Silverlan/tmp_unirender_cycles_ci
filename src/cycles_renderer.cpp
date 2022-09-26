@@ -21,6 +21,7 @@
 #include "util_raytracing/denoise.hpp"
 #include <sharedutils/util_hair.hpp>
 #include <sharedutils/util_baking.hpp>
+#include <fsys/ifile.hpp>
 #include <util_ocio.hpp>
 #include <scene/light.h>
 #include <scene/camera.h>
@@ -2197,6 +2198,98 @@ static void validate_session(ccl::Scene &scene)
 	}
 }
 
+// When baking, some pixels may end up with NaN values due to unknown issues
+// with Cycles internally. We'll fix those pixels here by overwriting them with the average
+// value of the surrounding pixels.
+// This only happens in the direct lighting map.
+static void fix_nan_pixels(uimg::ImageBuffer &imgBuf)
+{
+	auto w = imgBuf.GetWidth();
+	auto h = imgBuf.GetHeight();
+	for(auto x=decltype(w){0u};x<w;++x)
+	{
+		for(auto y=decltype(h){0u};y<h;++y)
+		{
+			auto view = imgBuf.GetPixelView(x,y);
+			Vector3 color {
+				view.GetFloatValue(uimg::Channel::R),
+				view.GetFloatValue(uimg::Channel::G),
+				view.GetFloatValue(uimg::Channel::B)
+			};
+			if(std::isnan(color.x) || std::isnan(color.y) || std::isnan(color.z))
+			{
+				std::vector<Vector4> neighborValues;
+				auto addNeighborValue = [&neighborValues,&imgBuf,w,h](uint32_t x,uint32_t y) {
+					if(x >= w || y >= h)
+						return;
+					auto view = imgBuf.GetPixelView(x,y);
+					Vector4 color {
+						view.GetFloatValue(uimg::Channel::R),
+						view.GetFloatValue(uimg::Channel::G),
+						view.GetFloatValue(uimg::Channel::B),
+						view.GetFloatValue(uimg::Channel::A)
+					};
+					if(
+						std::isnan(color[0]) || std::isnan(color[1]) || std::isnan(color[2]) || std::isnan(color[3]) ||
+						color[3] == 0.f
+					)
+						return;
+					neighborValues.push_back(color);
+				};
+
+				addNeighborValue(x -1,y);
+				addNeighborValue(x -1,y -1);
+				addNeighborValue(x -1,y +1);
+
+				addNeighborValue(x +1,y);
+				addNeighborValue(x +1,y -1);
+				addNeighborValue(x +1,y +1);
+
+				addNeighborValue(x,y -1);
+				addNeighborValue(x -1,y -1);
+				addNeighborValue(x +1,y -1);
+
+				addNeighborValue(x,y +1);
+				addNeighborValue(x -1,y +1);
+				addNeighborValue(x +1,y +1);
+
+				Vector4 avg{};
+				for(auto &p : neighborValues)
+					avg += p;
+				if(!neighborValues.empty())
+					avg = avg /static_cast<float>(neighborValues.size());
+
+				view.SetValue(uimg::Channel::R,avg.x);
+				view.SetValue(uimg::Channel::G,avg.y);
+				view.SetValue(uimg::Channel::B,avg.z);
+			}
+		}
+	}
+}
+
+#if 0
+static void debug_dump_images(std::unordered_map<std::string,std::array<std::shared_ptr<uimg::ImageBuffer>,umath::to_integral(unirender::Renderer::StereoEye::Count)>> &resultImageBuffers)
+{
+	for(auto &pair : resultImageBuffers)
+	{
+		if(pair.second.empty())
+			continue;
+		auto &imgBuf = pair.second.front();
+		if(!imgBuf)
+			continue;
+		filemanager::create_path("temp/cycles/");
+		auto f = filemanager::open_file(
+			"temp/cycles/debug_output_" +pair.first +".hdr",filemanager::FileMode::Write | filemanager::FileMode::Binary
+		);
+		if(f)
+		{
+			fsys::File fp {f};
+			uimg::save_image(fp,*imgBuf,uimg::ImageFormat::HDR,1.f);
+		}
+	}
+}
+#endif
+
 util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &worker,unirender::Renderer::ImageRenderStage stage,StereoEye eyeStage,unirender::Renderer::RenderStageResult *optResult)
 {
 	auto handled = unirender::Renderer::HandleRenderStage(worker,stage,eyeStage,optResult);
@@ -2313,10 +2406,14 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 						break;
 					}
 
-					if(Scene::IsRenderSceneMode(renderMode))
+					if(Scene::IsLightmapRenderMode(renderMode))
 					{
-						worker.SetResultMessage("Baking margin...");
+						worker.SetResultMessage("Fixing outliers...");
+						auto &imgBuf = GetResultImageBuffer(OUTPUT_DIFFUSE_DIRECT);
+						if(imgBuf)
+							fix_nan_pixels(*imgBuf);
 
+						worker.SetResultMessage("Baking margin...");
 						for(auto &pair : m_resultImageBuffers)
 						{
 							for(auto &imgBuf : pair.second)
@@ -2364,6 +2461,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 						imgBuf->ToHDR();
 					}
 				}
+
 				// ApplyPostProcessing(*resultImageBuffer,m_renderMode);
 
 				if(UpdateStereoEye(worker,stage,eyeStage))

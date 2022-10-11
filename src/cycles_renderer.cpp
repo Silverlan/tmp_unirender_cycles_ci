@@ -440,24 +440,6 @@ ccl::Light *unirender::cycles::Renderer::FindCclLight(const Light &light)
 	return (it != m_lightToCclLight.end()) ? it->second : nullptr;
 }
 
-void unirender::cycles::Renderer::SyncObject(const unirender::Object &obj)
-{
-	auto *cclObj = new ccl::Object{};
-	cclObj->name = obj.GetName();
-	m_cclScene->objects.push_back(cclObj);
-	m_objectToCclObject[&obj] = {cclObj,obj.GetPose()};
-	m_uuidToObject[util::uuid_to_string(obj.GetUuid())] = &obj;
-	cclObj->set_tfm(ToCyclesTransform(obj.GetPose()));
-	auto &mesh = obj.GetMesh();
-	cclObj->set_geometry(FindCclMesh(mesh));
-	// m_object.tag_update(*scene);
-
-#ifdef ENABLE_MOTION_BLUR_TEST
-	m_motionPose.SetOrigin(Vector3{100.f,100.f,100.f});
-	m_object.motion.push_back_slow(Scene::ToCyclesTransform(GetMotionPose()));
-#endif
-}
-
 template<typename TSrc,typename TDst>
 	static void copy_vector_to_ccl_array(const std::vector<TSrc> &srcData,ccl::array<TDst> &dstData,const std::function<TDst(const TSrc&)> &translate)
 {
@@ -495,6 +477,72 @@ template<typename T,typename TCcl>
 	if(!attr)
 		return;
 	copy_vector_to_attribute(data,*attr,translate);
+}
+
+void unirender::cycles::Renderer::SyncObject(const unirender::Object &obj)
+{
+	auto *cclObj = new ccl::Object{};
+	cclObj->name = obj.GetName();
+	m_cclScene->objects.push_back(cclObj);
+	auto &pose = obj.GetPose();
+	auto cclPose = ToCyclesTransform(pose);
+	m_objectToCclObject[&obj] = {cclObj,pose};
+	m_uuidToObject[util::uuid_to_string(obj.GetUuid())] = &obj;
+	cclObj->set_tfm(cclPose);
+	auto &mesh = obj.GetMesh();
+	auto *cclMesh = FindCclMesh(mesh);
+	cclObj->set_geometry(cclMesh);
+	// m_object.tag_update(*scene);
+
+#ifdef ENABLE_MOTION_BLUR_TEST
+	m_motionPose.SetOrigin(Vector3{100.f,100.f,100.f});
+	m_object.motion.push_back_slow(Scene::ToCyclesTransform(GetMotionPose()));
+#endif
+	auto &usedShaders = cclMesh->get_used_shaders();
+	for(auto &set : mesh.GetHairStrandDataSets())
+	{
+		if(set.shaderIndex >= usedShaders.size())
+			continue;
+		auto *shader = usedShaders[set.shaderIndex];
+
+		auto *cclHair = new ccl::Hair{};
+		m_cclScene->geometry.push_back(cclHair);
+
+		auto numHair = set.strandData.hairSegments.size();
+		uint32_t pointOffset = 0;
+		cclHair->reserve_curves(numHair,set.strandData.points.size());
+		std::vector<Vector2> testUv;
+		testUv.reserve(numHair);
+		for(auto i=decltype(numHair){0u};i<numHair;++i)
+		{
+			auto numSegments = set.strandData.hairSegments[i];
+			auto numPoints = numSegments +1;
+			cclHair->add_curve(pointOffset,0 /* shader */);
+			for(auto j=decltype(numPoints){0u};j<numPoints;++j)
+			{
+				auto p = pose *set.strandData.points[pointOffset +j];
+				auto thickness = set.strandData.thicknessData[pointOffset +j];
+				cclHair->add_curve_key(ToCyclesPosition(p),thickness);
+			}
+			testUv.push_back(set.strandData.uvs[pointOffset]);
+
+			pointOffset += numPoints;
+		}
+
+		initialize_attribute<Vector2,ccl::float2>(*cclHair,ccl::ATTR_STD_UV,testUv,[](const Vector2 &v) -> ccl::float2 {return ToCyclesUV(v);});
+
+		ccl::array<ccl::Node*> shaders;
+		shaders.resize(1);
+		shaders[0] = shader;
+		cclHair->set_used_shaders(shaders);
+
+		//attr_uv = hair->attributes.add(name, TypeFloat2, ATTR_ELEMENT_CURVE);
+
+		auto *cclObj = new ccl::Object{};
+		m_cclScene->objects.push_back(cclObj);
+		//cclObj->set_tfm(ToCyclesTransform(obj.GetPose()));
+		cclObj->set_geometry(cclHair);
+	}
 }
 
 static ccl::ShaderInput *find_input_socket(ccl::ShaderNode &node,const char *strInput)
@@ -604,51 +652,6 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 	{
 		auto *attr = cclMesh->attributes.add(ccl::ATTR_STD_GENERATED);
 		memcpy(attr->data_float3(), cclMesh->get_verts().data(), sizeof(ccl::float3) *cclMesh->get_verts().size());
-	}
-
-	for(auto &set : mesh.GetHairStrandDataSets())
-	{
-		if(set.shaderIndex >= usedShaders.size())
-			continue;
-		auto *shader = usedShaders[set.shaderIndex];
-
-		auto *cclHair = new ccl::Hair{};
-		m_cclScene->geometry.push_back(cclHair);
-
-		auto numHair = set.strandData.hairSegments.size();
-		uint32_t pointOffset = 0;
-		cclHair->reserve_curves(numHair,set.strandData.points.size());
-		std::vector<Vector2> testUv;
-		testUv.reserve(numHair);
-		for(auto i=decltype(numHair){0u};i<numHair;++i)
-		{
-			auto numSegments = set.strandData.hairSegments[i];
-			auto numPoints = numSegments +1;
-			cclHair->add_curve(pointOffset,0 /* shader */);
-			for(auto j=decltype(numPoints){0u};j<numPoints;++j)
-			{
-				auto &p = set.strandData.points[pointOffset +j];
-				auto thickness = set.strandData.thicknessData[pointOffset +j];
-				cclHair->add_curve_key(ccl::float3{p.x,-p.z,p.y},thickness);
-			}
-			testUv.push_back(set.strandData.uvs[pointOffset]);
-
-			pointOffset += numPoints;
-		}
-
-		initialize_attribute<Vector2,ccl::float2>(*cclHair,ccl::ATTR_STD_UV,testUv,[](const Vector2 &v) -> ccl::float2 {return ToCyclesUV(v);});
-
-		ccl::array<ccl::Node*> shaders;
-		shaders.resize(1);
-		shaders[0] = shader;
-		cclHair->set_used_shaders(shaders);
-
-		//attr_uv = hair->attributes.add(name, TypeFloat2, ATTR_ELEMENT_CURVE);
-
-		auto *cclObj = new ccl::Object{};
-		m_cclScene->objects.push_back(cclObj);
-		//cclObj->set_tfm(ToCyclesTransform(obj.GetPose()));
-		cclObj->set_geometry(cclHair);
 	}
 }
 

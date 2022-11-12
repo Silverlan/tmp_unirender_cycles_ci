@@ -53,7 +53,6 @@
 #include <Shlobj.h>
 #endif
 
-
 static std::optional<std::string> KERNEL_PATH {};
 void unirender::Scene::SetKernelPath(const std::string &kernelPath) {KERNEL_PATH = kernelPath;}
 int cycles_standalone_test(int argc, const char **argv,bool initPaths);
@@ -198,7 +197,7 @@ float unirender::cycles::Renderer::ToCyclesLength(float len)
 	auto scale = util::pragma::units_to_metres(1.f);
 	return len *scale;
 }
-std::shared_ptr<unirender::cycles::Renderer> unirender::cycles::Renderer::Create(const unirender::Scene &scene,Flags flags)
+std::shared_ptr<unirender::cycles::Renderer> unirender::cycles::Renderer::Create(const unirender::Scene &scene,std::string &outErr,Flags flags)
 {
 	auto renderer = std::shared_ptr<Renderer>{new Renderer{scene,flags}};
 	renderer->m_renderMode = scene.GetRenderMode();
@@ -3493,11 +3492,16 @@ void unirender::cycles::Renderer::WriteRenderTile(unirender::TileManager &tileMa
 	// TODO: What's this callback for exactly?
 }
 #endif
+#ifdef __linux__
+#define DLLEXPORT __attribute__((visibility("default")))
+#else
+#define DLLEXPORT __declspec(dllexport)
+#endif
 extern "C" {
-	bool __declspec(dllexport) create_renderer(const unirender::Scene &scene,unirender::Renderer::Flags flags,std::shared_ptr<unirender::Renderer> &outRenderer)
+	bool DLLEXPORT create_renderer(const unirender::Scene &scene,unirender::Renderer::Flags flags,std::shared_ptr<unirender::Renderer> &outRenderer,std::string &outErr)
 	{
 		unirender::Scene::SetKernelPath(util::get_program_path() +"/modules/unirender/cycles");
-		outRenderer = unirender::cycles::Renderer::Create(scene,flags);
+		outRenderer = unirender::cycles::Renderer::Create(scene,outErr,flags);
 		return outRenderer != nullptr;
 	}
 };

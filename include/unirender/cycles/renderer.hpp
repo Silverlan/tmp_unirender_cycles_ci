@@ -29,7 +29,7 @@ namespace unirender::cycles
 		: public unirender::Renderer
 	{
 	public:
-		static std::shared_ptr<Renderer> Create(const unirender::Scene &scene,Flags flags);
+		static std::shared_ptr<Renderer> Create(const unirender::Scene &scene,std::string &outErr,Flags flags);
 		static constexpr ccl::AttributeStandard ALPHA_ATTRIBUTE_TYPE = ccl::AttributeStandard::ATTR_STD_POINTINESS;
 
 		enum class StateFlags : uint32_t

@@ -1,0 +1,65 @@
+name: Build
+description: 'Build library'
+inputs:
+  root_dir:
+    description: 'Root directory'
+    required: true
+  should_checkout:
+    description: 'Checkout the core library?'
+    required: true
+    default: '1'
+  dir:
+    description: 'Library directory'
+    required: true
+    default: 'external_libs/wgui'
+runs:
+  using: "composite"
+  steps:
+    - name: Initialize Env
+      id: init-env
+      uses: Silverlan/common_actions/set_common_env_vars@main
+
+    - uses: ChristopherHX/conditional@b4a9649204f81002ec9a4ef7d4bf7d6b2ab7fa55
+      name: CMake Build
+      with:
+        if: ${{inputs.should_checkout == '1'}}
+        step: |
+          uses: Silverlan/common_actions/get_submodule@main
+          with:
+            repo: 'Silverlan/tmp_UniRender_Cycles_ci'
+            repo_name: 'tmp_UniRender_Cycles_ci'
+            cmake_var: 'DEPENDENCY_WGUI_INCLUDE'
+            dir: 'external_libs'
+            checkout_submodules: '0'
+            
+    - name: Install dependencies
+      shell: bash
+      run: |
+        sudo apt install xorg-dev
+
+    - name: Build Cycles
+      uses: Silverlan/tmp_UniRender_Cycles_ci/github_actions/build_cycles@main
+      
+    - name: Install vcpkg
+      shell: bash
+      run: |
+        git clone https://github.com/Microsoft/vcpkg.git
+        ./vcpkg/bootstrap-vcpkg.sh
+        
+    - name: Install Openimageio
+      shell: bash
+      run: |
+        vcpkg install openimageio
+        
+    - name: Download common external libs
+      uses: Silverlan/common_actions/get_common_external_libs@main
+      
+    - name: Build Test
+      shell: bash
+      run: |
+        git clone --recursive https://github.com/Silverlan/util_image.git external_libs/util_image
+        git clone --recursive https://github.com/Silverlan/util_udm.git external_libs/util_udm
+        git clone --recursive https://github.com/Silverlan/tmp_unirender_ci2.git external_libs/unirender
+        cmake -G "Unix Makefiles" -DUNIRENDER_CYCLES_ENABLE_DEPENDENCIES=0 $value -DDEPENDENCY_CYCLES_INCLUDE=./cycles/src -DDEPENDENCY_CYCLES_OPENIMAGEIO_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/opencolorio/include -DDEPENDENCY_CYCLES_OPENIMAGEIO_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/openimageio/include -DDEPENDENCY_CYCLES_EMBREE_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/embree/include -DDEPENDENCY_OPENEXR_IMATH_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/imath/include/ -DDEPENDENCY_CYCLES_TBB_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/tbb/include -DDEPENDENCY_CYCLES_ATOMIC_INCLUDE=./cycles/third_party/atomic -DDEPENDENCY_CYCLES_PUGIXML_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/pugixml/include/pugixml.hpp -DDEPENDENCY_CYCLES_OSL_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/osl/include/ -DDEPENDENCY_UTIL_IMAGE_INCLUDE=external_libs/util_image/include -DDEPENDENCY_MATHUTIL_INCLUDE=external_libs/mathutil/include -DDEPENDENCY_UTIL_UDM_INCLUDE=external_libs/util_udm/include -DDEPENDENCY_SHAREDUTILS_INCLUDE=external_libs/sharedutils/include -DDEPENDENCY_VFILESYSTEM_INCLUDE=external_libs/vfilesystem/include -DDEPENDENCY_GLM_INCLUDE=third_party_libs/glm -DDEPENDENCY_UTIL_RAYTRACING_INCLUDE=external_libs/unirender/include -DDEPENDENCY_UTIL_OCIO_INCLUDE=external_libs/unirender/external_libs/util_ocio/include
+        cmake --build ./ --verbose --target UniRender_Cycles
+     

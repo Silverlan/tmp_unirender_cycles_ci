@@ -1,0 +1,32 @@
+name: Build Cycles
+description: 'Build Cycles'
+runs:
+  using: "composite"
+  steps:
+    - name: Initialize Env
+      id: init-env
+      uses: Silverlan/common_actions/set_common_env_vars@main
+      
+    - name: Install prerequisites
+      shell: bash
+      run:   |
+        sudo apt-get update
+        sudo apt-get install cmake
+        sudo apt-get install subversion
+        sudo apt-get install python3.6
+
+    - name: Build Cycles
+      shell: bash
+      run:   |
+        # git clone git://git.blender.org/cycles.git
+        git clone https://github.com/Silverlan/cycles.git
+        cd cycles
+        # git checkout 3e66108418d62ece236c06b20d2028ce2d0e3554
+        # git reset --hard
+        make update
+        make
+        cd ../
+        mkdir cmake-make
+        cd cmake-make
+        cmake ../cycles -G "Unix Makefiles" -DWITH_CYCLES_EMBREE=1 -DWITH_CYCLES_CUDA_BINARIES=1 -DWITH_CYCLES_DEVICE_CUDA=1 -DWITH_CYCLES_DEVICE_OPTIX=1 -DWITH_CYCLES_OPENCOLORIO=1 -DWITH_CYCLES_OPENIMAGEDENOISE=1 -DWITH_CYCLES_OPENSUBDIV=1 -DWITH_CYCLES_OPENVDB=1 -DWITH_CYCLES_USD=1
+        cmake --build ./ --verbose

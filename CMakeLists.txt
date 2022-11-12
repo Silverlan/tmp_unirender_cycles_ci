@@ -51,6 +51,8 @@ function(add_def DEF)
 	set(DEFINITIONS ${DEFINITIONS} ${DEF} PARENT_SCOPE)
 endfunction(add_def)
 
+set(UNIRENDER_CYCLES_ENABLE_DEPENDENCIES 1 CACHE BOOL "Enable project dependencies?")
+
 ##### CONFIGURATION #####
 
 set(PROJ_NAME UniRender_Cycles)
@@ -106,7 +108,9 @@ add_def(WITH_EMBREE)
 add_def(WITH_OPENSUBDIV)
 add_def(WITH_OPENIMAGEDENOISE)
 add_def(OIDN_STATIC_LIB)
-add_def(WITH_CYCLES_LOGGING)
+if(WIN32)
+	add_def(WITH_CYCLES_LOGGING)
+endif()
 add_def(GLOG_NO_ABBREVIATED_SEVERITIES)
 add_def(GOOGLE_GLOG_DLL_DECL=__declspec\(dllexport\))
 add_def("CCL_NAMESPACE_BEGIN=namespace ccl {")
@@ -169,12 +173,18 @@ if(DEFINED PRECOMPILED_HEADER)
 endif()
 set_target_properties(${PROJ_NAME} PROPERTIES ${TARGET_PROPERTIES})
 
-target_link_libraries(${PROJ_NAME}
-	opengl32
-	glu32
-	version
-	shlwapi
-)
+if(WIN32)
+	target_link_libraries(${PROJ_NAME}
+		opengl32
+		glu32
+		version
+		shlwapi
+	)
+endif()
+
+if(${UNIRENDER_CYCLES_ENABLE_DEPENDENCIES})
+	add_dependencies(${PROJ_NAME} util_raytracing)
+endif()
 
 add_dependencies(${PROJ_NAME} util_raytracing)
 

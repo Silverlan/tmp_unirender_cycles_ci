@@ -80,7 +80,7 @@ uint32_t unirender::cycles::DisplayDriver::GetTileIndex(uint32_t x,uint32_t y) c
 bool unirender::cycles::DisplayDriver::update_begin(const Params &params, int effectiveWidth, int effectiveHeight)
 {
 	auto inBounds = (params.full_offset.x >= 0 && params.full_offset.y >= 0 && params.full_offset.x +effectiveWidth <= m_width && params.full_offset.y +effectiveHeight <= m_height);
-	assert(inBound);
+	assert(inBounds);
 	if(!inBounds)
 		return false;
 	m_mappedSize = {effectiveWidth,effectiveHeight};

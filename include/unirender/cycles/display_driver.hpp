@@ -13,6 +13,7 @@
 #include <util_image_types.hpp>
 #include <mathutil/uvec.h>
 #include <unordered_map>
+#include <condition_variable>
 #include <thread>
 #include <mutex>
 #include <queue>

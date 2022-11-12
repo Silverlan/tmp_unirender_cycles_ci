@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#ifdef _WIN32
 #include <stdio.h>
 
 #include <algorithm>
@@ -711,3 +712,4 @@ void xml_read_file(Scene *scene, const char *filepath)
 }
 
 CCL_NAMESPACE_END
+#endif

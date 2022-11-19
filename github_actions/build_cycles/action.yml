@@ -3,6 +3,10 @@ description: 'Build Cycles'
 runs:
   using: "composite"
   steps:
+    - uses: Silverlan/common_actions/action_start@main
+      with:
+        name: "unirender_cycles > build_cycles"
+  
     - name: Initialize Env
       id: init-env
       uses: Silverlan/common_actions/set_common_env_vars@main
@@ -30,3 +34,5 @@ runs:
         cd cmake-make
         cmake ../cycles -G "Unix Makefiles" -DWITH_CYCLES_EMBREE=1 -DWITH_CYCLES_CUDA_BINARIES=1 -DWITH_CYCLES_DEVICE_CUDA=1 -DWITH_CYCLES_DEVICE_OPTIX=1 -DWITH_CYCLES_OPENCOLORIO=1 -DWITH_CYCLES_OPENIMAGEDENOISE=1 -DWITH_CYCLES_OPENSUBDIV=1 -DWITH_CYCLES_OPENVDB=1 -DWITH_CYCLES_USD=1
         cmake --build ./ --verbose
+
+    - uses: Silverlan/common_actions/action_end@main

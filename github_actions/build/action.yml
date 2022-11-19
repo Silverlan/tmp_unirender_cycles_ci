@@ -15,6 +15,11 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - uses: Silverlan/common_actions/action_start@main
+      with:
+        name: "unirender_cycles > build"
+        input_values: "root_dir: ${{inputs.root_dir}},should_checkout: ${{inputs.should_checkout}},dir: ${{inputs.dir}}"
+  
     - name: Initialize Env
       id: init-env
       uses: Silverlan/common_actions/set_common_env_vars@main
@@ -26,8 +31,8 @@ runs:
         step: |
           uses: Silverlan/common_actions/get_submodule@main
           with:
-            repo: 'Silverlan/tmp_UniRender_Cycles_ci'
-            repo_name: 'tmp_UniRender_Cycles_ci'
+            repo: 'Silverlan/UniRender_Cycles'
+            repo_name: 'UniRender_Cycles'
             cmake_var: 'DEPENDENCY_WGUI_INCLUDE'
             dir: 'external_libs'
             checkout_submodules: '0'
@@ -38,28 +43,36 @@ runs:
         sudo apt install xorg-dev
 
     - name: Build Cycles
-      uses: Silverlan/tmp_UniRender_Cycles_ci/github_actions/build_cycles@main
+      uses: Silverlan/UniRender_Cycles/github_actions/build_cycles@main
       
-    - name: Install vcpkg
-      shell: bash
-      run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        ./vcpkg/bootstrap-vcpkg.sh
-        
-    - name: Install Openimageio
-      shell: bash
-      run: |
-        vcpkg install openimageio
+    #- name: Install vcpkg
+    #  shell: bash
+    #  run: |
+    #    git clone https://github.com/Microsoft/vcpkg.git
+    #    ./vcpkg/bootstrap-vcpkg.s
         
     - name: Download common external libs
       uses: Silverlan/common_actions/get_common_external_libs@main
       
-    - name: Build Test
+    - name: Build
       shell: bash
       run: |
         git clone --recursive https://github.com/Silverlan/util_image.git external_libs/util_image
         git clone --recursive https://github.com/Silverlan/util_udm.git external_libs/util_udm
-        git clone --recursive https://github.com/Silverlan/tmp_unirender_ci2.git external_libs/unirender
-        cmake -G "Unix Makefiles" -DUNIRENDER_CYCLES_ENABLE_DEPENDENCIES=0 $value -DDEPENDENCY_CYCLES_INCLUDE=./cycles/src -DDEPENDENCY_CYCLES_OPENIMAGEIO_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/opencolorio/include -DDEPENDENCY_CYCLES_OPENIMAGEIO_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/openimageio/include -DDEPENDENCY_CYCLES_EMBREE_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/embree/include -DDEPENDENCY_OPENEXR_IMATH_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/imath/include/ -DDEPENDENCY_CYCLES_TBB_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/tbb/include -DDEPENDENCY_CYCLES_ATOMIC_INCLUDE=./cycles/third_party/atomic -DDEPENDENCY_CYCLES_PUGIXML_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/pugixml/include/pugixml.hpp -DDEPENDENCY_CYCLES_OSL_INCLUDE=/home/runner/work/tmp_UniRender_Cycles_ci/tmp_UniRender_Cycles_ci/lib/linux_centos7_x86_64/osl/include/ -DDEPENDENCY_UTIL_IMAGE_INCLUDE=external_libs/util_image/include -DDEPENDENCY_MATHUTIL_INCLUDE=external_libs/mathutil/include -DDEPENDENCY_UTIL_UDM_INCLUDE=external_libs/util_udm/include -DDEPENDENCY_SHAREDUTILS_INCLUDE=external_libs/sharedutils/include -DDEPENDENCY_VFILESYSTEM_INCLUDE=external_libs/vfilesystem/include -DDEPENDENCY_GLM_INCLUDE=third_party_libs/glm -DDEPENDENCY_UTIL_RAYTRACING_INCLUDE=external_libs/unirender/include -DDEPENDENCY_UTIL_OCIO_INCLUDE=external_libs/unirender/external_libs/util_ocio/include
-        cmake --build ./ --verbose --target UniRender_Cycles
+        git clone --recursive https://github.com/Silverlan/unirender.git external_libs/unirender
+        rootDir="$PWD"
+        wsDir="${{ github.workspace }}"
+        cyclesLibDir="$rootDir/cycles/build/lib/"
+        cmake -G "Unix Makefiles" -DUNIRENDER_CYCLES_ENABLE_DEPENDENCIES=0 $value -DDEPENDENCY_CYCLES_INCLUDE=./cycles/src -DDEPENDENCY_CYCLES_OPENIMAGEIO_INCLUDE=$wsDir/lib/linux_centos7_x86_64/opencolorio/include -DDEPENDENCY_CYCLES_OPENIMAGEIO_INCLUDE=$wsDir/lib/linux_centos7_x86_64/openimageio/include -DDEPENDENCY_CYCLES_EMBREE_INCLUDE=$wsDir/lib/linux_centos7_x86_64/embree/include -DDEPENDENCY_OPENEXR_IMATH_INCLUDE=$wsDir/lib/linux_centos7_x86_64/imath/include/ -DDEPENDENCY_CYCLES_TBB_INCLUDE=$wsDir/lib/linux_centos7_x86_64/tbb/include -DDEPENDENCY_CYCLES_ATOMIC_INCLUDE=./cycles/third_party/atomic -DDEPENDENCY_CYCLES_PUGIXML_INCLUDE=$wsDir/lib/linux_centos7_x86_64/pugixml/include/pugixml.hpp -DDEPENDENCY_CYCLES_OSL_INCLUDE=$wsDir/lib/linux_centos7_x86_64/osl/include/ -DDEPENDENCY_UTIL_IMAGE_INCLUDE=external_libs/util_image/include -DDEPENDENCY_MATHUTIL_INCLUDE=external_libs/mathutil/include -DDEPENDENCY_UTIL_UDM_INCLUDE=external_libs/util_udm/include -DDEPENDENCY_SHAREDUTILS_INCLUDE=external_libs/sharedutils/include -DDEPENDENCY_VFILESYSTEM_INCLUDE=external_libs/vfilesystem/include -DDEPENDENCY_GLM_INCLUDE=third_party_libs/glm -DDEPENDENCY_UTIL_RAYTRACING_INCLUDE=external_libs/unirender/include -DDEPENDENCY_UTIL_OCIO_INCLUDE=external_libs/unirender/external_libs/util_ocio/include \
+          -DDEPENDENCY_CYCLES_DEPENDENCIES_LOCATION="$rootDir/lib/linux_centos7_x86_64" \
+          -DDEPENDENCY_CYCLES_LIBRARY_LOCATION="$rootDir/cycles/build/lib" \
+          -DDEPENDENCY_CYCLES_TBB_LIBRARY="$rootDir/lib/linux_centos7_x86_64/tbb/lib/libtbb.a" \
+          -DDEPENDENCY_JPEG_LIBRARY="$rootDir/lib/linux_centos7_x86_64/jpeg/lib/libjpeg.a" \
+          -DDEPENDENCY_ZLIB_LIBRARY="$rootDir/lib/linux_centos7_x86_64/zlib/lib/libz.a" \
+          -DDEPENDENCY_TIFF_LIBRARY="$rootDir/lib/linux_centos7_x86_64/tiff/lib/libtiff.a" \
+          -DDEPENDENCY_GLEW_LIBRARY="$rootDir/lib/linux_centos7_x86_64/glew/lib/libGLEW.a"
+        echo "Running CMake Build: cmake --build ./ --verbose --target UniRender_cycles"
+        cmake --build ./ --verbose --target UniRender_cycles
      
+    - uses: Silverlan/common_actions/action_end@main
+    

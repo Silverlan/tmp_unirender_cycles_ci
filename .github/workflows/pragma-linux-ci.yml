@@ -31,6 +31,11 @@ jobs:
         with:
           submodules: true
 
+      - name: Install Openimageio
+        shell: bash
+        run: |
+          vcpkg install openimageio[pybind11]
+
       - name: Setup
         id: setup
         uses: Silverlan/common_actions/setup@main
@@ -40,19 +45,19 @@ jobs:
           
       - name: Build
         id: build
-        uses: Silverlan/tmp_UniRender_Cycles_ci/github_actions/build@main
+        uses: Silverlan/UniRender_Cycles/github_actions/build@main
         with:
           root_dir: "${{ env.GA_ROOT_DIR }}"
           should_checkout: "0"
           dir: '.'
           build_shared: '1'
-          
+      
       - name: Create Release Files
         shell: bash
         run: |
           mkdir release
           mkdir release/lib
-          rsync --mkpath ./libUniRender_Cycles.so release/modules/unirender/cycles/
+          rsync --mkpath ./libUniRender_cycles.so release/modules/unirender/cycles/
 
       - name: Release Binaries
         uses: Silverlan/common_actions/release_nightly_binaries@main

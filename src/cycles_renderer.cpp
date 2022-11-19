@@ -55,6 +55,13 @@
 #include <Shlobj.h>
 #endif
 
+#ifdef __linux__
+#include <OpenImageIO/ustring.h>
+// This fixes an odd missing symbol issue
+// May have something to do with this: https://github.com/OpenImageIO/oiio/pull/1176/commits/a2ccfad7c4962a5203ea2cf755fd102b4c67f997
+std::string ccl::ustring::empty_std_string;
+#endif
+
 static std::optional<std::string> KERNEL_PATH {};
 void unirender::Scene::SetKernelPath(const std::string &kernelPath) {KERNEL_PATH = kernelPath;}
 int cycles_standalone_test(int argc, const char **argv,bool initPaths);

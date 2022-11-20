@@ -19,14 +19,38 @@ runs:
         sudo apt-get install subversion
         sudo apt-get install python3.6
 
+    - name: Download Cycles
+      shell: bash
+      run:   |
+        git clone git://git.blender.org/cycles.git
+        cd cycles
+        git checkout b1882be6b1f2e27725ee672d87c5b6f8d6113eb1
+
+    - name: Apply Modifications
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run:   |
+        # We need to add the --allow-unsupported-compiler flag to a cycles CMake configuration file manually,
+        # otherwise compilation will fail for newer versions of Visual Studio.
+        $kernelCmakePath="./cycles/src/kernel/CMakeLists.txt"
+        $unsupportedCompilerFlag = Select-String -Path "$kernelCmakePath" -Pattern '--allow-unsupported-compiler'
+        if ($unsupportedCompilerFlag -eq $null) {
+          # Only set the flag if it hasn't been set yet
+          (Get-Content "$kernelCmakePath").replace('${CUDA_NVCC_FLAGS}', '${CUDA_NVCC_FLAGS} --allow-unsupported-compiler') | Set-Content "$kernelCmakePath"
+        }
+
+    - name: Apply Modifications
+      if: runner.os == 'Linux'
+      shell: bash
+      run:   |
+        # Building the cycles executable causes build errors. We don't need it, but unfortunately cycles doesn't provide us with a
+        # way to disable it, so we'll have to make some changes to the CMake configuration file.
+        sed -i -e 's/if(WITH_CYCLES_STANDALONE)/if(false)/g' "cycles/src/app/CMakeLists.txt"
+
     - name: Build Cycles
       shell: bash
       run:   |
-        # git clone git://git.blender.org/cycles.git
-        git clone https://github.com/Silverlan/cycles.git
         cd cycles
-        # git checkout 3e66108418d62ece236c06b20d2028ce2d0e3554
-        # git reset --hard
         make update
         make
         cd ../

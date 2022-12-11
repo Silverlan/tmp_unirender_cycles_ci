@@ -15,7 +15,8 @@
  */
 
 // Note: This is a 1:1 copy of the Cycles standalone executable, and should be updated whenever Cycles is updated!
-
+int cycles_standalone_test(int argc, const char **argv,bool initPaths) {return 0;}
+#if 0
 #ifdef _WIN32
 #include <stdio.h>
 
@@ -608,4 +609,5 @@ int cycles_standalone_test(int argc, const char **argv,bool initPaths)
 
   return 0;
 }
+#endif
 #endif

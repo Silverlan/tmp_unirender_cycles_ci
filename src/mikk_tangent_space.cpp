@@ -18,6 +18,7 @@
 
 #include "util_raytracing/mesh.hpp"
 #include "unirender/cycles/renderer.hpp"
+#include "icycles.hpp"
 #include <scene/mesh.h>
 #include <mikktspace.h>
 
@@ -29,24 +30,24 @@ struct MikkUserData {
                float *tangent_sign)
       : mesh(mesh), texface(NULL), orco(NULL), tangent(tangent), tangent_sign(tangent_sign)
   {
-    const ccl::AttributeSet &attributes = (mesh->get_num_subd_faces()) ? mesh->subd_attributes :
-                                                                 mesh->attributes;
+    const ccl::AttributeSet &attributes = (icycles::mesh::get_num_subd_faces(*mesh)) ? icycles::mesh::get_subd_attributes(*mesh) :
+                                                                 icycles::geometry::get_attributes(const_cast<ccl::Mesh&>(*mesh));
 
-    ccl::Attribute *attr_vN = attributes.find(ccl::ATTR_STD_VERTEX_NORMAL);
-    vertex_normal = attr_vN->data_float3();
+    ccl::Attribute *attr_vN = icycles::attribute_set::find(attributes,ccl::ATTR_STD_VERTEX_NORMAL);
+    vertex_normal = icycles::attribute::data_float3(*attr_vN);
 
     if (layer_name == NULL) {
-      ccl::Attribute *attr_orco = attributes.find(ccl::ATTR_STD_GENERATED);
+      ccl::Attribute *attr_orco = icycles::attribute_set::find(attributes,ccl::ATTR_STD_GENERATED);
 
       if (attr_orco) {
-        orco = attr_orco->data_float3();
+        orco = icycles::attribute::data_float3(*attr_orco);
        // mesh_texture_space(*(BL::Mesh *)&b_mesh, orco_loc, orco_size);
       }
     }
     else {
-      ccl::Attribute *attr_uv = attributes.find(ccl::ustring(layer_name));
+      ccl::Attribute *attr_uv = icycles::attribute_set::find_by_layer(attributes,layer_name);
       if (attr_uv != NULL) {
-        texface = attr_uv->data_float2();
+        texface = icycles::attribute::data_float2(*attr_uv);
       }
     }
   }
@@ -66,20 +67,20 @@ struct MikkUserData {
 static int mikk_get_num_faces(const SMikkTSpaceContext *context)
 {
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
-  if (userdata->mesh->get_num_subd_faces()) {
-    return userdata->mesh->get_num_subd_faces();
+  if (icycles::mesh::get_num_subd_faces(*userdata->mesh)) {
+    return icycles::mesh::get_num_subd_faces(*userdata->mesh);
   }
   else {
-    return userdata->mesh->num_triangles();
+    return icycles::mesh::num_triangles(*userdata->mesh);
   }
 }
 
 static int mikk_get_num_verts_of_face(const SMikkTSpaceContext *context, const int face_num)
 {
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
-  if (userdata->mesh->get_num_subd_faces()) {
+  if (icycles::mesh::get_num_subd_faces(*userdata->mesh)) {
     const ccl::Mesh *mesh = userdata->mesh;
-    return mesh->get_subd_face(face_num).num_corners;
+    return icycles::mesh::get_subd_face(*mesh,face_num).num_corners;
   }
   else {
     return 3;
@@ -88,19 +89,19 @@ static int mikk_get_num_verts_of_face(const SMikkTSpaceContext *context, const i
 
 static int mikk_vertex_index(const ccl::Mesh *mesh, const int face_num, const int vert_num)
 {
-  if (mesh->get_num_subd_faces()) {
-    const ccl::Mesh::SubdFace &face = mesh->get_subd_face(face_num);
-    return mesh->get_subd_face_corners()[face.start_corner + vert_num];
+  if (icycles::mesh::get_num_subd_faces(*mesh)) {
+    const ccl::Mesh::SubdFace &face = icycles::mesh::get_subd_face(*mesh,face_num);
+    return icycles::mesh::get_subd_face_corners(*mesh)[face.start_corner + vert_num];
   }
   else {
-    return mesh->get_triangles()[face_num * 3 + vert_num];
+    return icycles::mesh::get_triangles(*mesh)[face_num * 3 + vert_num];
   }
 }
 
 static int mikk_corner_index(const ccl::Mesh *mesh, const int face_num, const int vert_num)
 {
-  if (mesh->get_num_subd_faces()) {
-    const ccl::Mesh::SubdFace &face = mesh->get_subd_face(face_num);
+  if (icycles::mesh::get_num_subd_faces(*mesh)) {
+    const ccl::Mesh::SubdFace &face = icycles::mesh::get_subd_face(*mesh,face_num);
     return face.start_corner + vert_num;
   }
   else {
@@ -116,7 +117,7 @@ static void mikk_get_position(const SMikkTSpaceContext *context,
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
   const ccl::Mesh *mesh = userdata->mesh;
   const int vertex_index = mikk_vertex_index(mesh, face_num, vert_num);
-  const ccl::float3 vP = mesh->get_verts()[vertex_index];
+  const ccl::float3 vP = icycles::mesh::get_verts(*mesh)[vertex_index];
   P[0] = vP.x;
   P[1] = vP.y;
   P[2] = vP.z;
@@ -159,24 +160,24 @@ static void mikk_get_normal(const SMikkTSpaceContext *context,
   const MikkUserData *userdata = (const MikkUserData *)context->m_pUserData;
   const ccl::Mesh *mesh = userdata->mesh;
   ccl::float3 vN;
-  if (mesh->get_num_subd_faces()) {
-    const ccl::Mesh::SubdFace &face = mesh->get_subd_face(face_num);
+  if (icycles::mesh::get_num_subd_faces(*mesh)) {
+    const ccl::Mesh::SubdFace &face = icycles::mesh::get_subd_face(*mesh,face_num);
     if (face.smooth) {
       const int vertex_index = mikk_vertex_index(mesh, face_num, vert_num);
       vN = userdata->vertex_normal[vertex_index];
     }
     else {
-      vN = face.normal(mesh);
+      vN = icycles::subd_face::normal(face,mesh);
     }
   }
   else {
-    if (mesh->get_smooth()[face_num]) {
+    if (icycles::mesh::get_smooth(*mesh)[face_num]) {
       const int vertex_index = mikk_vertex_index(mesh, face_num, vert_num);
       vN = userdata->vertex_normal[vertex_index];
     }
     else {
-      const ccl::Mesh::Triangle tri = mesh->get_triangle(face_num);
-      vN = tri.compute_normal(&mesh->get_verts()[0]);
+      const ccl::Mesh::Triangle tri = icycles::mesh::get_triangle(*mesh,face_num);
+      vN = icycles::triangle::compute_normal(tri,&icycles::mesh::get_verts(*mesh)[0]);
     }
   }
   N[0] = vN.x;
@@ -204,43 +205,44 @@ void unirender::cycles::compute_tangents(
 {
     const char *layer_name = nullptr;
   /* Create tangent attributes. */
-  ccl::AttributeSet &attributes = (mesh->get_num_subd_faces()) ? mesh->subd_attributes : mesh->attributes;
+  ccl::AttributeSet &attributes = (icycles::mesh::get_num_subd_faces(*mesh)) ? const_cast<ccl::AttributeSet&>(icycles::mesh::get_subd_attributes(*mesh)) :
+	  const_cast<ccl::AttributeSet&>(icycles::geometry::get_attributes(*mesh));
   ccl::Attribute *attr;
-  ccl::ustring name;
+  std::string name;
   if (layer_name != NULL) {
-    name = ccl::ustring((ccl::string(layer_name) + ".tangent").c_str());
+    name = (ccl::string(layer_name) + ".tangent");
   }
   else {
-    name = ccl::ustring("orco.tangent");
+    name = "orco.tangent";
   }
   if (active_render) {
     //attr = attributes.add(ccl::ATTR_STD_UV_TANGENT, name);
-	  attr = attributes.find(ccl::ATTR_STD_UV_TANGENT);
+	  attr = icycles::attribute_set::find(attributes,ccl::ATTR_STD_UV_TANGENT);
   }
   else {
-    attr = attributes.add(name, ccl::TypeDesc::TypeVector, ccl::ATTR_ELEMENT_CORNER);
+	attr = icycles::attribute_set::add_by_type(attributes,name.c_str(),"vector",ccl::ATTR_ELEMENT_CORNER);
   }
-  ccl::float3 *tangent = attr->data_float3();
+  ccl::float3 *tangent = icycles::attribute::data_float3(*attr);
   /* Create bitangent sign attribute. */
   float *tangent_sign = NULL;
   if (need_sign) {
     ccl::Attribute *attr_sign;
-    ccl::ustring name_sign;
+    std::string name_sign;
     if (layer_name != NULL) {
-      name_sign = ccl::ustring((ccl::string(layer_name) + ".tangent_sign").c_str());
+      name_sign = (ccl::string(layer_name) + ".tangent_sign");
     }
     else {
-      name_sign = ccl::ustring("orco.tangent_sign");
+      name_sign = "orco.tangent_sign";
     }
 
     if (active_render) {
       //attr_sign = attributes.add(ccl::ATTR_STD_UV_TANGENT_SIGN, name_sign);
-      attr_sign = attributes.find(ccl::ATTR_STD_UV_TANGENT_SIGN);
+      attr_sign = icycles::attribute_set::find(attributes,ccl::ATTR_STD_UV_TANGENT_SIGN);
     }
     else {
-      attr_sign = attributes.add(name_sign, ccl::TypeDesc::TypeFloat, ccl::ATTR_ELEMENT_CORNER);
+		attr_sign = icycles::attribute_set::add_by_type(attributes,name_sign.c_str(),"float",ccl::ATTR_ELEMENT_CORNER);
     }
-    tangent_sign = attr_sign->data_float();
+    tangent_sign = icycles::attribute::data_float(*attr_sign);
   }
   /* Setup userdata. */
   MikkUserData userdata(layer_name, mesh, tangent, tangent_sign);

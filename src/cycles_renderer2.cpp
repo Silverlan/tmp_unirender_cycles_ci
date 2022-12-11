@@ -15,6 +15,7 @@
 #include "unirender/cycles/baking.hpp"
 #include "unirender/cycles/renderer.hpp"
 #include "unirender/cycles/display_driver.hpp"
+#include "unirender/cycles/cycles_interface.hpp"
 #include "util_raytracing/shader_nodes.hpp"
 #include "unirender/cycles/ccl_shader.hpp"
 #include "util_raytracing/model_cache.hpp"
@@ -178,7 +179,7 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				auto &cam = m_scene->GetCamera();
 				auto stereoscopic = cam.IsStereoscopic();
 				if(stereoscopic)
-					m_cclScene->camera->set_stereo_eye(ccl::Camera::StereoEye::STEREO_LEFT);
+					icycles::camera::set_stereo_eye(*m_cclScene->camera,ccl::Camera::StereoEye::STEREO_LEFT);
 				ImageRenderStage initialRenderStage;
 				switch(m_renderMode)
 				{
@@ -231,19 +232,19 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 				//options.session->scene->camera->need_flags_update = true;
 				//options.session->scene->camera->need_device_update = true;
 				//options.session->reset(options.session_params, session_buffer_params());
-				m_cclSession->reset(m_sessionParams,m_bufferParams);
-				m_cclSession->start();
+				icycles::session::reset(*m_cclSession,*m_sessionParams,*m_bufferParams);
+				icycles::session::start(*m_cclSession);
 			}
 			else
 			{
 				umath::set_flag(m_stateFlags,StateFlags::SessionWasStarted);
-				m_cclSession->start();
+				icycles::session::start(*m_cclSession);
 			}
 
 			auto progressMultiplier = umath::is_flag_set(m_stateFlags,StateFlags::NativeDenoising) ? 0.95f : 1.f;
 			WaitForRenderStage(worker,0.f,progressMultiplier,[this,&worker,stage,eyeStage]() mutable -> RenderStageResult {
 				if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine) == false)
-					m_cclSession->wait();
+					icycles::session::wait(*m_cclSession);
 				else if(m_progressiveRunning)
 				{
 					std::unique_lock<std::mutex> lock {m_progressiveMutex};
@@ -373,9 +374,9 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			InitializeAlbedoPass(true);
 		worker.AddThread([this,&worker,eyeStage,stage]() {
 			validate_session(*m_cclScene);
-			m_cclSession->start();
+			icycles::session::start(*m_cclSession);
 			WaitForRenderStage(worker,0.95f,0.025f,[this,&worker,eyeStage,stage]() mutable -> RenderStageResult {
-				m_cclSession->wait();
+				icycles::session::wait(*m_cclSession);
 				auto &albedoImageBuffer = GetResultImageBuffer(OUTPUT_ALBEDO,eyeStage);
 				albedoImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_ALBEDO);
 				// ApplyPostProcessing(*albedoImageBuffer,m_renderMode);
@@ -399,9 +400,9 @@ util::EventReply unirender::cycles::Renderer::HandleRenderStage(RenderWorker &wo
 			InitializeNormalPass(true);
 		worker.AddThread([this,&worker,eyeStage,stage]() {
 			validate_session(*m_cclScene);
-			m_cclSession->start();
+			icycles::session::start(*m_cclSession);
 			WaitForRenderStage(worker,0.975f,0.025f,[this,&worker,eyeStage,stage]() mutable -> RenderStageResult {
-				m_cclSession->wait();
+				icycles::session::wait(*m_cclSession);
 				auto &normalImageBuffer = GetResultImageBuffer(OUTPUT_NORMAL,eyeStage);
 				normalImageBuffer = GetOutputDriver()->GetImageBuffer(OUTPUT_NORMAL);
 				// ApplyPostProcessing(*normalImageBuffer,m_renderMode);
@@ -426,7 +427,7 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 {
 	for(;;)
 	{
-		worker.UpdateProgress(baseProgress +umath::min(m_cclSession->progress.get_progress(),1.0) *progressMultiplier);
+		worker.UpdateProgress(baseProgress +umath::min(icycles::progress::get_progress(icycles::session::get_progress(*m_cclSession)),1.0) *progressMultiplier);
 
 		if(worker.IsCancelled())
 			SetCancelled("Cancelled by application.");
@@ -441,35 +442,41 @@ void unirender::cycles::Renderer::WaitForRenderStage(RenderWorker &worker,float 
 		if(umath::is_flag_set(m_stateFlags,StateFlags::ReloadSessionScheduled) && (!m_displayDriver || m_displayDriver->WasTileWritten()))
 		{
 			umath::set_flag(m_stateFlags,StateFlags::ReloadSessionScheduled,false);
-			m_cclScene->camera->need_flags_update = true;
-			m_cclScene->camera->need_device_update = true;
-			m_cclSession->reset(m_sessionParams,m_bufferParams);
+			icycles::camera::set_need_flags_update(*m_cclScene->camera,true);
+			icycles::camera::set_need_device_update(*m_cclScene->camera,true);
+			icycles::session::reset(*m_cclSession,*m_sessionParams,*m_bufferParams);
 			if(m_displayDriver)
 				m_displayDriver->ResetTileWrittenFlag();
 		}
 
 		if(umath::is_flag_set(m_stateFlags,StateFlags::ProgressiveRefine) && m_progressiveRunning == false)
 			break;
+		auto &progress = icycles::session::get_progress(*m_cclSession);
 		if(m_cclSession->progress.get_cancel())
 		{
 			if(m_restartState != 0)
 				continue;
-			std::cerr<<"WARNING: Cycles rendering has been cancelled: "<<m_cclSession->progress.get_cancel_message()<<std::endl;
-			worker.Cancel(m_cclSession->progress.get_cancel_message(),1 /* error code */);
+			icycles::CString cancelMsg {};
+			icycles::progress::get_cancel_message(progress,&cancelMsg.cstr,cancelMsg.len);
+			std::cerr<<"WARNING: Cycles rendering has been cancelled: "<<std::string{cancelMsg}<<std::endl;
+			worker.Cancel(cancelMsg,1 /* error code */);
 			break;
 		}
+		icycles::CString cstatus;
+		icycles::CString csubStatus;
+		icycles::progress::get_progress_status(progress,&cstatus.cstr,cstatus.len,&csubStatus.cstr,csubStatus.len);
+		auto status = static_cast<std::string>(cstatus);
+		auto subStatus = static_cast<std::string>(csubStatus);
 		if(m_cclSession->progress.get_error())
 		{
-			std::string status;
-			std::string subStatus;
-			m_cclSession->progress.get_status(status,subStatus);
-			std::cerr<<"WARNING: Cycles rendering has failed at status '"<<status<<"' ("<<subStatus<<") with error: "<<m_cclSession->progress.get_error_message()<<std::endl;
-			worker.SetStatus(util::JobStatus::Failed,m_cclSession->progress.get_error_message());
+			icycles::CString errMsg;
+			icycles::progress::get_error_message(progress,&errMsg.cstr,errMsg.len);
+
+			std::cerr<<"WARNING: Cycles rendering has failed at status '"<<status<<"' ("<<subStatus<<") with error: "<<std::string{errMsg}<<std::endl;
+			worker.SetStatus(util::JobStatus::Failed,errMsg);
 			break;
 		}
-		std::string status,subStatus;
-		m_cclSession->progress.get_status(status,subStatus);
-		if(umath::min(m_cclSession->progress.get_progress(),1.0) == 1.0 || status == "Finished")
+		if(umath::min(icycles::progress::get_progress(icycles::session::get_progress(*m_cclSession)),1.0) == 1.0 || status == "Finished")
 			break;
 		std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	}
@@ -484,16 +491,16 @@ void unirender::cycles::Renderer::InitStereoEye(StereoEye eyeStage)
 	if(eyeStage == StereoEye::Left)
 	{
 		// Switch to right eye
-		m_cclScene->camera->set_stereo_eye(ccl::Camera::StereoEye::STEREO_RIGHT);
-		m_cclScene->camera->need_flags_update = true;
-		m_cclScene->camera->need_device_update = true;
+		icycles::camera::set_stereo_eye(*m_cclScene->camera,ccl::Camera::StereoEye::STEREO_RIGHT);
+		icycles::camera::set_need_flags_update(*m_cclScene->camera,true);
+		icycles::camera::set_need_device_update(*m_cclScene->camera,true);
 	}
 	else if(eyeStage == StereoEye::Right)
 	{
 		// Switch back to left eye and continue with next stage
-		m_cclScene->camera->set_stereo_eye(ccl::Camera::StereoEye::STEREO_LEFT);
-		m_cclScene->camera->need_flags_update = true;
-		m_cclScene->camera->need_device_update = true;
+		icycles::camera::set_stereo_eye(*m_cclScene->camera,ccl::Camera::StereoEye::STEREO_LEFT);
+		icycles::camera::set_need_flags_update(*m_cclScene->camera,true);
+		icycles::camera::set_need_device_update(*m_cclScene->camera,true);
 	}
 }
 
@@ -525,7 +532,7 @@ void unirender::cycles::Renderer::ReloadProgressiveRender(bool clearExposure,boo
 	if(clearExposure)
 		m_tileManager.SetExposure(1.f);
 	umath::set_flag(m_stateFlags,StateFlags::ProgressiveRefine,false);
-	m_cclSession->progress.reset();
+	icycles::progress::reset(icycles::session::get_progress(*m_cclSession));
 }
 
 void unirender::cycles::Renderer::PrepareCyclesSceneForRendering()
@@ -539,8 +546,9 @@ void unirender::cycles::Renderer::SetCancelled(const std::string &msg)
 	if(m_cancelled || m_cclSession == nullptr)
 		return;
 	m_cancelled = true;
-	m_cclSession->progress.set_cancel(msg);
-	m_cclSession->cancel(true);
+	auto &progress = icycles::session::get_progress(*m_cclSession);
+	icycles::progress::set_cancel(progress,msg.c_str());
+	icycles::session::cancel(*m_cclSession,true);
 	m_tileManager.Cancel();
 }
 
@@ -975,34 +983,34 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 {
 	auto &sceneInfo = m_scene->GetSceneInfo();
 	// Default parameters taken from Blender
-	auto &integrator = *scene.integrator;
-	auto &film = *scene.film;
+	auto &integrator = *icycles::scene::get_integrator(scene);
+	auto &film = *icycles::scene::get_film(scene);
 	
 	auto apiData = GetApiData();
-	integrator.set_min_bounce(0);
-	integrator.set_max_bounce(sceneInfo.maxBounces);
-	integrator.set_max_diffuse_bounce(sceneInfo.maxDiffuseBounces);
-	integrator.set_max_glossy_bounce(sceneInfo.maxGlossyBounces);
-	integrator.set_max_transmission_bounce(sceneInfo.maxTransmissionBounces);
-	integrator.set_max_volume_bounce(0);
+	icycles::integrator::set_min_bounce(integrator,0);
+	icycles::integrator::set_max_bounce(integrator,sceneInfo.maxBounces);
+	icycles::integrator::set_max_diffuse_bounce(integrator,sceneInfo.maxDiffuseBounces);
+	icycles::integrator::set_max_glossy_bounce(integrator,sceneInfo.maxGlossyBounces);
+	icycles::integrator::set_max_transmission_bounce(integrator,sceneInfo.maxTransmissionBounces);
+	icycles::integrator::set_max_volume_bounce(integrator,0);
 
-	integrator.set_transparent_min_bounce(0);
-	integrator.set_transparent_max_bounce(maxTransparencyBounces);
+	icycles::integrator::set_transparent_min_bounce(integrator,0);
+	icycles::integrator::set_transparent_max_bounce(integrator,maxTransparencyBounces);
 
-	integrator.set_volume_max_steps(1024);
-	integrator.set_volume_step_rate(0.1);
+	icycles::integrator::set_volume_max_steps(integrator,1024);
+	icycles::integrator::set_volume_step_rate(integrator,0.1);
 
-	integrator.set_caustics_reflective(true);
-	integrator.set_caustics_refractive(true);
-	integrator.set_filter_glossy(0.f);
-	integrator.set_seed(0);
-	integrator.set_sampling_pattern(ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL);
+	icycles::integrator::set_caustics_reflective(integrator,true);
+	icycles::integrator::set_caustics_refractive(integrator,true);
+	icycles::integrator::set_filter_glossy(integrator,0.f);
+	icycles::integrator::set_seed(integrator,0);
+	icycles::integrator::set_sampling_pattern(integrator,ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL);
 
 	auto useAdaptiveSampling = sceneInfo.useAdaptiveSampling;
 	auto adaptiveSamplingThreshold = sceneInfo.adaptiveSamplingThreshold;
 	auto adaptiveMinSamples = sceneInfo.adaptiveMinSamples;
-	integrator.set_adaptive_threshold(sceneInfo.adaptiveSamplingThreshold);
-	integrator.set_adaptive_min_samples(sceneInfo.adaptiveSamplingThreshold);
+	icycles::integrator::set_adaptive_threshold(integrator,sceneInfo.adaptiveSamplingThreshold);
+	icycles::integrator::set_adaptive_min_samples(integrator,sceneInfo.adaptiveSamplingThreshold);
 
 	apiData.GetFromPath("cycles/useAdaptiveSampling")(useAdaptiveSampling);
 	if(useAdaptiveSampling)
@@ -1010,9 +1018,9 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 		apiData.GetFromPath("cycles/adaptiveSamplingThreshold")(adaptiveSamplingThreshold);
 		apiData.GetFromPath("cycles/adaptiveMinSamples")(adaptiveMinSamples);
 	}
-	integrator.set_use_adaptive_sampling(useAdaptiveSampling);
-	integrator.set_adaptive_threshold(adaptiveSamplingThreshold);
-	integrator.set_adaptive_min_samples(adaptiveMinSamples);
+	icycles::integrator::set_use_adaptive_sampling(integrator,useAdaptiveSampling);
+	icycles::integrator::set_adaptive_threshold(integrator,adaptiveSamplingThreshold);
+	icycles::integrator::set_adaptive_min_samples(integrator,adaptiveMinSamples);
 
 #if 0
 	// Debug values
@@ -1082,22 +1090,22 @@ void unirender::cycles::Renderer::SetupRenderSettings(
     integrator.set_use_denoise_pass_normal(true);
     integrator.set_denoiser_prefilter(ccl::DENOISER_PREFILTER_ACCURATE);
 #endif
-	integrator.tag_modified();
+	icycles::integrator::tag_modified(integrator);
 
 	// Film
-	film.set_exposure(1.f);
-	film.set_filter_type(ccl::FilterType::FILTER_GAUSSIAN);
-	film.set_filter_width(1.5f);
+	icycles::film::set_exposure(film,1.f);
+	icycles::film::set_filter_type(film,ccl::FilterType::FILTER_GAUSSIAN);
+	icycles::film::set_filter_width(film,1.5f);
 	if(renderMode == unirender::Scene::RenderMode::RenderImage)
 	{
-		film.set_mist_start(5.f);
-		film.set_mist_depth(25.f);
-		film.set_mist_falloff(2.f);
+		icycles::film::set_mist_start(film,5.f);
+		icycles::film::set_mist_depth(film,25.f);
+		icycles::film::set_mist_falloff(film,2.f);
 	}
-	film.tag_modified();
+	icycles::film::tag_modified(film);
 
-	film.set_cryptomatte_depth(3);
-	film.set_cryptomatte_passes(ccl::CRYPT_NONE);
+	icycles::film::set_cryptomatte_depth(film,3);
+	icycles::film::set_cryptomatte_passes(film,ccl::CRYPT_NONE);
 
 #if 0
 	// Debug values
@@ -1119,65 +1127,65 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	{
 		if(pair.first == OUTPUT_COLOR)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_COLOR});
-			pass->set_type(ccl::PASS_COMBINED);
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_COLOR);
+			icycles::pass::set_type(*pass,ccl::PASS_COMBINED);
 			break;
 		}
 		else if(pair.first == OUTPUT_DIFFUSE)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_DIFFUSE});
-			pass->set_type(ccl::PASS_DIFFUSE);
-			pass->set_include_albedo(false);
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_DIFFUSE);
+			icycles::pass::set_type(*pass,ccl::PASS_DIFFUSE);
+			icycles::pass::set_include_albedo(*pass,false);
 		}
 		else if(pair.first == OUTPUT_DIFFUSE_DIRECT)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_DIFFUSE_DIRECT});
-			pass->set_type(ccl::PASS_DIFFUSE_DIRECT);
-			pass->set_include_albedo(false);
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_DIFFUSE_DIRECT);
+			icycles::pass::set_type(*pass,ccl::PASS_DIFFUSE_DIRECT);
+			icycles::pass::set_include_albedo(*pass,false);
 		}
 		else if(pair.first == OUTPUT_DIFFUSE_INDIRECT)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_DIFFUSE_INDIRECT});
-			pass->set_type(ccl::PASS_DIFFUSE_INDIRECT);
-			pass->set_include_albedo(false);
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_DIFFUSE_INDIRECT);
+			icycles::pass::set_type(*pass,ccl::PASS_DIFFUSE_INDIRECT);
+			icycles::pass::set_include_albedo(*pass,false);
 		}
 		else if(pair.first == OUTPUT_ALBEDO)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_ALBEDO});
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_ALBEDO);
 			if(m_scene->GetRenderMode() == unirender::Scene::RenderMode::SceneAlbedo)
-				pass->set_type(ccl::PASS_DIFFUSE_COLOR);
+				icycles::pass::set_type(*pass,ccl::PASS_DIFFUSE_COLOR);
 			else
-				pass->set_type(ccl::PASS_DENOISING_ALBEDO);
+				icycles::pass::set_type(*pass,ccl::PASS_DENOISING_ALBEDO);
 		}
 		else if(pair.first == OUTPUT_NORMAL)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_NORMAL});
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_NORMAL);
 			if(m_scene->GetRenderMode() == unirender::Scene::RenderMode::SceneNormals)
-				pass->set_type(ccl::PASS_NORMAL);
+				icycles::pass::set_type(*pass,ccl::PASS_NORMAL);
 			else
-				pass->set_type(ccl::PASS_DENOISING_NORMAL);
+				icycles::pass::set_type(*pass,ccl::PASS_DENOISING_NORMAL);
 		}
 		else if(pair.first == OUTPUT_DEPTH)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_DEPTH});
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_DEPTH);
 			if(m_scene->GetRenderMode() == unirender::Scene::RenderMode::SceneDepth)
-				pass->set_type(ccl::PASS_DEPTH);
+				icycles::pass::set_type(*pass,ccl::PASS_DEPTH);
 			else
-				pass->set_type(ccl::PASS_DENOISING_DEPTH);
+				icycles::pass::set_type(*pass,ccl::PASS_DENOISING_DEPTH);
 		}
 		else if(pair.first == OUTPUT_AO)
 		{
-			auto *pass = scene.create_node<ccl::Pass>();
-			pass->set_name(ccl::ustring{OUTPUT_AO});
-			pass->set_type(ccl::PASS_AO);
-			pass->set_include_albedo(false);
+			auto *pass = icycles::scene::create_node_pass(scene);
+			icycles::node::set_name(*pass,OUTPUT_AO);
+			icycles::pass::set_type(*pass,ccl::PASS_AO);
+			icycles::pass::set_include_albedo(*pass,false);
 		}
 	}
 
@@ -1227,10 +1235,10 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	if(sceneInfo.motionBlurStrength > 0.f)
 	{
 		// ccl::Pass::add(ccl::PassType::PASS_MOTION,passes);
-		scene.integrator->set_motion_blur(true);
+		icycles::integrator::set_motion_blur(*icycles::scene::get_integrator(scene),true);
 	}
 
-	film.set_pass_alpha_threshold(0.5);
+	icycles::film::set_pass_alpha_threshold(film,0.5);
 	//film.set_tag_passes_update(&scene, passes);
 	//film.set_display_pass(displayPass);
 	//film.tag_update(&scene);

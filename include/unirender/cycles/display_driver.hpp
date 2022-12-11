@@ -26,6 +26,22 @@ namespace unirender
 {
 	class TileManager;
 };
+namespace icycles
+{
+	class OutputDriver
+		: public std::enable_shared_from_this<OutputDriver>
+	{
+	public:
+		using Tile = ccl::OutputDriver::Tile;
+		OutputDriver()=default;
+
+		ccl::OutputDriver *CreateDriver();
+
+		virtual void write_render_tile(const Tile &tile)=0;
+		virtual bool update_render_tile(const Tile &tile) {return false;}
+		virtual bool read_render_tile(const Tile &tile) {return false;}
+	};
+};
 namespace unirender::cycles
 {
 	class BaseDriver
@@ -90,7 +106,7 @@ namespace unirender::cycles
 	};
 
 	class OutputDriver
-		: public ccl::OutputDriver,public BaseDriver
+		: public icycles::OutputDriver,public BaseDriver
 	{
 	public:
 		OutputDriver(const std::vector<std::pair<std::string,uimg::Format>> &passes,uint32_t width,uint32_t height);

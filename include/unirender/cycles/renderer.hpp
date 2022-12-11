@@ -20,6 +20,13 @@ namespace unirender
 {
 	class Scene; namespace cycles {class Renderer;};
 };
+namespace icycles
+{
+	using Session = std::shared_ptr<ccl::Session>;
+	using SessionParams = std::shared_ptr<ccl::SessionParams>;
+	using SceneParams = std::shared_ptr<ccl::SceneParams>;
+	using BufferParams = std::shared_ptr<ccl::BufferParams>;
+};
 namespace unirender::cycles
 {
 	void compute_tangents(ccl::Mesh *mesh,bool need_sign,bool active_render);
@@ -139,17 +146,17 @@ namespace unirender::cycles
 		void InitializeDebugScene(const std::string &fileName,const std::vector<std::string> &xmlFileNames);
 		void PopulateDebugScene();
 
-		ccl::SessionParams GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const;
-		ccl::BufferParams GetBufferParameters() const;
+		icycles::SessionParams GetSessionParameters(const unirender::Scene &scene,const ccl::DeviceInfo &devInfo) const;
+		icycles::BufferParams GetBufferParameters() const;
 		void SyncLight(unirender::Scene &scene,const unirender::Light &light,bool update=false);
 		void SyncCamera(const unirender::Camera &cam,bool update=false);
 		void SyncObject(const unirender::Object &obj);
 		void SyncMesh(const unirender::Mesh &mesh);
 		void InitializeSession(unirender::Scene &scene,const ccl::DeviceInfo &devInfo);
-		std::optional<ccl::DeviceInfo> InitializeDevice(const unirender::Scene &scene,std::string &outErr);
+		std::shared_ptr<ccl::DeviceInfo> InitializeDevice(const unirender::Scene &scene,std::string &outErr);
 		bool Initialize(unirender::Scene &scene,std::string &outErr);
 		unirender::Scene::DeviceType m_deviceType = unirender::Scene::DeviceType::CPU;
-		std::unique_ptr<ccl::Session> m_cclSession = nullptr;
+		icycles::Session m_cclSession;
 		DisplayDriver *m_displayDriver = nullptr;
 		OutputDriver *m_outputDriver = nullptr;
 		ccl::Scene *m_cclScene = nullptr;
@@ -174,8 +181,8 @@ namespace unirender::cycles
 		std::unique_ptr<util::baking::BakeDataView> m_bakeData = nullptr;
 		std::vector<util::baking::BakePixel> m_bakePixels;
 
-		ccl::SessionParams m_sessionParams;
-		ccl::BufferParams m_bufferParams;
+		icycles::SessionParams m_sessionParams;
+		icycles::BufferParams m_bufferParams;
 
 		Scene::RenderMode m_renderMode = Scene::RenderMode::RenderImage;
 	};

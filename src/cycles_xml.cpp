@@ -13,7 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "scene/scene.h"
+namespace ccl {
+void xml_read_file(ccl::Scene *scene, const char *filepath) {}
+};
+#if 0
 #ifdef _WIN32
 #include <stdio.h>
 
@@ -712,4 +716,5 @@ void xml_read_file(Scene *scene, const char *filepath)
 }
 
 CCL_NAMESPACE_END
+#endif
 #endif

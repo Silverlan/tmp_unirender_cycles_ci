@@ -7,18 +7,13 @@
 
 #include "util_raytracing/shader.hpp"
 #include "unirender/cycles/ccl_shader.hpp"
+#include "unirender/cycles/cycles_interface.hpp"
 #include "util_raytracing/scene.hpp"
 #include "util_raytracing/mesh.hpp"
 #include "util_raytracing/exception.hpp"
 #include "unirender/cycles/renderer.hpp"
 #include <sharedutils/util_path.hpp>
-#include <scene/shader.h>
-#include <scene/shader_graph.h>
-#include <scene/scene.h>
-#include <scene/shader_nodes.h>
-#include <OpenImageIO/ustring.h>
-
-
+#pragma optimize("",off)
 ccl::NodeMathType unirender::cycles::to_ccl_type(unirender::nodes::math::MathType type)
 {
 	switch(type)
@@ -172,14 +167,21 @@ ccl::NodeVectorMathType unirender::cycles::to_ccl_type(unirender::nodes::vector_
 	static_assert(umath::to_integral(unirender::nodes::vector_math::MathType::Count) == 20);
 }
 
-ccl::ustring unirender::cycles::to_ccl_type(unirender::ColorSpace space)
+std::string unirender::cycles::to_ccl_type(unirender::ColorSpace space)
 {
+	icycles::CString cstr {};
 	switch(space)
 	{
 	case unirender::ColorSpace::Raw:
-		return ccl::u_colorspace_raw;
+	{
+		icycles::util::get_colorspace_raw(&cstr.cstr,cstr.len);
+		return cstr;
+	}
 	case unirender::ColorSpace::Srgb:
-		return ccl::u_colorspace_srgb;
+	{
+		icycles::util::get_colorspace_srgb(&cstr.cstr,cstr.len);
+		return cstr;
+	}
 	}
 	static_assert(umath::to_integral(unirender::ColorSpace::Count) == 3);
 }
@@ -380,9 +382,9 @@ std::shared_ptr<unirender::CCLShader> unirender::CCLShader::Create(cycles::Rende
 		if(shader)
 			return shader;
 	}
-	cclShader.set_volume_sampling_method(ccl::VOLUME_SAMPLING_MULTIPLE_IMPORTANCE);
+	icycles::shader::set_volume_sampling_method(cclShader,ccl::VOLUME_SAMPLING_MULTIPLE_IMPORTANCE);
 
-	ccl::ShaderGraph *graph = new ccl::ShaderGraph();
+	auto *graph = icycles::shader_graph::create();
 	auto pShader = std::shared_ptr<CCLShader>{new CCLShader{renderer,cclShader,*graph}};
 	pShader->m_flags |= Flags::CCLShaderOwnedByScene;
 
@@ -396,8 +398,8 @@ std::shared_ptr<unirender::CCLShader> unirender::CCLShader::Create(cycles::Rende
 	auto shader = renderer.GetCachedShader(desc);
 	if(shader)
 		return shader;
-	auto *cclShader = new ccl::Shader{}; // Object will be removed automatically by cycles
-	cclShader->name = desc.GetName();
+	auto *cclShader = icycles::shader::create();
+	icycles::node::set_name(*cclShader,desc.GetName().c_str());
 	renderer.GetCclScene()->shaders.push_back(cclShader);
 	shader = Create(renderer,*cclShader,desc,true);
 	auto apiData = renderer.GetApiData();
@@ -405,7 +407,7 @@ std::shared_ptr<unirender::CCLShader> unirender::CCLShader::Create(cycles::Rende
 	auto dontSimplify = false;
 	apiData.GetFromPath("cycles/shader/dontSimplifyGraphs")(dontSimplify);
 	if(!dontSimplify)
-		shader->m_cclGraph.simplify(renderer.GetCclScene());
+		icycles::shader_graph::simplify(shader->m_cclGraph,renderer.GetCclScene());
 
 	auto dumpGraphs = false;
 	apiData.GetFromPath("cycles/debug/dump_shader_graphs")(dumpGraphs);
@@ -418,7 +420,7 @@ std::shared_ptr<unirender::CCLShader> unirender::CCLShader::Create(cycles::Rende
 		auto idx = desc.GetIndex();
 		std::string fileName = "graph_" +util::uuid_to_string(util::generate_uuid_v4()) +".txt";
 		auto filePath = dumpPath +util::Path::CreateFile(fileName);
-		graph.dump_graph(filePath.GetString().c_str());
+		icycles::shader_graph::dump_graph(graph,filePath.GetString().c_str());
 	}
 	return shader;
 }
@@ -430,9 +432,9 @@ unirender::CCLShader::CCLShader(cycles::Renderer &renderer,ccl::Shader &cclShade
 unirender::CCLShader::~CCLShader()
 {
 	if(umath::is_flag_set(m_flags,Flags::CCLShaderGraphOwnedByScene) == false)
-		delete &m_cclGraph;
+		icycles::shader_graph::destroy(&m_cclGraph);
 	if(umath::is_flag_set(m_flags,Flags::CCLShaderOwnedByScene) == false)
-		delete &m_cclShader;
+		icycles::shader::destroy(&m_cclShader);
 }
 
 ccl::Shader *unirender::CCLShader::operator->() {return &m_cclShader;}
@@ -442,8 +444,8 @@ void unirender::CCLShader::DoFinalize(Scene &scene)
 {
 	BaseObject::DoFinalize(scene);
 	m_flags |= Flags::CCLShaderGraphOwnedByScene | Flags::CCLShaderOwnedByScene;
-	m_cclShader.set_graph(&m_cclGraph);
-	m_cclShader.tag_update(m_renderer.GetCclScene());
+	icycles::shader::set_graph(m_cclShader,&m_cclGraph);
+	icycles::shader::tag_update(m_cclShader,m_renderer.GetCclScene());
 }
 
 std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::ResolveCustomNode(const std::string &typeName)
@@ -475,7 +477,7 @@ std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::Res
 				if(name == unirender::nodes::normal_texture::IN_FILENAME)
 				{
 					*outNode = imageTexNode;
-					return imageTexNode->type->find_input(ccl::ustring{unirender::nodes::image_texture::IN_FILENAME});
+					return icycles::node_type::find_input(*icycles::node::get_type(*imageTexNode),unirender::nodes::image_texture::IN_FILENAME);
 				}
 				return nullptr;
 			}
@@ -486,22 +488,24 @@ std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::Res
 		auto wrapper = std::make_unique<NormalNodeWrapper>();
 		wrapper->imageTexNode = static_cast<ccl::ImageTextureNode*>(AddNode(unirender::NODE_IMAGE_TEXTURE));
 		assert(wrapper->imageTexNode);
-		wrapper->imageTexNode->set_colorspace(ccl::u_colorspace_raw);
+		icycles::CString cstr {};
+		icycles::util::get_colorspace_raw(&cstr.cstr,cstr.len);
+		icycles::image_texture_node::set_colorspace(*wrapper->imageTexNode,cstr.cstr);
 
 		auto *sep = static_cast<ccl::SeparateRGBNode*>(AddNode(unirender::NODE_SEPARATE_RGB));
-		m_cclGraph.connect(FindOutput(*wrapper->imageTexNode,unirender::nodes::image_texture::OUT_COLOR),FindInput(*sep,unirender::nodes::separate_rgb::IN_COLOR));
+		icycles::shader_graph::connect(m_cclGraph,FindOutput(*wrapper->imageTexNode,unirender::nodes::image_texture::OUT_COLOR),FindInput(*sep,unirender::nodes::separate_rgb::IN_COLOR));
 
 		auto *cmb = static_cast<ccl::CombineRGBNode*>(AddNode(unirender::NODE_COMBINE_RGB));
-		m_cclGraph.connect(FindOutput(*sep,unirender::nodes::separate_rgb::OUT_R),FindInput(*cmb,unirender::nodes::combine_rgb::IN_G));
-		m_cclGraph.connect(FindOutput(*sep,unirender::nodes::separate_rgb::OUT_G),FindInput(*cmb,unirender::nodes::combine_rgb::IN_R));
-		m_cclGraph.connect(FindOutput(*sep,unirender::nodes::separate_rgb::OUT_B),FindInput(*cmb,unirender::nodes::combine_rgb::IN_B));
+		icycles::shader_graph::connect(m_cclGraph,FindOutput(*sep,unirender::nodes::separate_rgb::OUT_R),FindInput(*cmb,unirender::nodes::combine_rgb::IN_G));
+		icycles::shader_graph::connect(m_cclGraph,FindOutput(*sep,unirender::nodes::separate_rgb::OUT_G),FindInput(*cmb,unirender::nodes::combine_rgb::IN_R));
+		icycles::shader_graph::connect(m_cclGraph,FindOutput(*sep,unirender::nodes::separate_rgb::OUT_B),FindInput(*cmb,unirender::nodes::combine_rgb::IN_B));
 		
 		wrapper->normalMapNode = static_cast<ccl::NormalMapNode*>(AddNode(unirender::NODE_NORMAL_MAP));
 		assert(wrapper->normalMapNode);
-		wrapper->normalMapNode->set_space(ccl::NodeNormalMapSpace::NODE_NORMAL_MAP_TANGENT);
+		icycles::normal_map_node::set_space(*wrapper->normalMapNode,ccl::NodeNormalMapSpace::NODE_NORMAL_MAP_TANGENT);
 
 		auto *normIn = FindInput(*wrapper->normalMapNode,unirender::nodes::normal_map::IN_COLOR);
-		m_cclGraph.connect(FindOutput(*cmb,unirender::nodes::combine_rgb::OUT_IMAGE),normIn);
+		icycles::shader_graph::connect(m_cclGraph,FindOutput(*cmb,unirender::nodes::combine_rgb::OUT_IMAGE),normIn);
 		return wrapper;
 	}
 	return nullptr;
@@ -509,15 +513,15 @@ std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::Res
 
 ccl::ShaderNode *unirender::CCLShader::AddNode(const std::string &typeName)
 {
-	auto *nodeType = ccl::NodeType::find(ccl::ustring{typeName});
-	auto *snode = nodeType ? static_cast<ccl::ShaderNode*>(nodeType->create(nodeType)) : nullptr;
+	auto *nodeType = icycles::util::find_node_type(typeName.c_str());
+	auto *snode = nodeType ? static_cast<ccl::ShaderNode*>(icycles::node_type::create_node(*nodeType)) : nullptr;
 	if(snode == nullptr)
 		return nullptr;
 
 	auto name = GetCurrentInternalNodeName();
-	snode->set_owner(&m_cclGraph);
-	snode->name = name;
-	m_cclGraph.add(snode);
+	icycles::shader_node::set_owner(*snode,&m_cclGraph);
+	icycles::node::set_name(*snode,name.c_str());
+	icycles::shader_graph::add(m_cclGraph,snode);
 	return snode;
 }
 
@@ -587,7 +591,7 @@ void unirender::CCLShader::InitializeNode(const NodeDesc &desc,std::unordered_ma
 				m_renderer.GetScene().HandleError("Invalid CCL input '" +cclToSocket->second +"' for node of type '" +std::string{typeid(*cclToSocket->first).name()} +"'!");
 				continue;
 			}
-			m_cclGraph.connect(output,input);
+			icycles::shader_graph::connect(m_cclGraph,output,input);
 		}
 		return;
 	}
@@ -595,7 +599,7 @@ void unirender::CCLShader::InitializeNode(const NodeDesc &desc,std::unordered_ma
 	if(typeName == "output")
 	{
 		// Output node already exists by default
-		nodeToCclNode[&desc] = m_cclGraph.output();
+		nodeToCclNode[&desc] = icycles::shader_graph::output(m_cclGraph);
 		return;
 	}
 	struct CclNodeWrapper : public unirender::CCLShader::BaseNodeWrapper
@@ -613,7 +617,7 @@ void unirender::CCLShader::InitializeNode(const NodeDesc &desc,std::unordered_ma
 		virtual const ccl::SocketType *FindProperty(const std::string &name,ccl::ShaderNode **outNode) override
 		{
 			*outNode = node;
-			return node->type->find_input(ccl::ustring{name});
+			return icycles::node_type::find_input(*icycles::node::get_type(*node),name.c_str());
 		}
 		virtual ccl::ShaderNode *GetOutputNode() override {return node;}
 		ccl::ShaderNode *node = nullptr;
@@ -684,41 +688,50 @@ template<typename TSrc,typename TDst>
 std::string unirender::CCLShader::TranslateInputName(const ccl::ShaderNode &node,const std::string &inputName)
 {
 	// Some Cycles node socket names don't match ours (due to Cycles updates or other reasons), so we'll have to translate them here
-	if(typeid(node) == typeid(ccl::MathNode))
+	auto type = icycles::shader_node::get_type_enum(node);
+	switch(type)
+	{
+	case icycles::ShaderNodeType::Math:
 	{
 		if(ustring::compare(inputName.c_str(),unirender::nodes::math::IN_TYPE,false))
 			return "math_type";
+		break;
 	}
-	else if(typeid(node) == typeid(ccl::MappingNode))
+	case icycles::ShaderNodeType::Mapping:
 	{
 		if(ustring::compare(inputName.c_str(),unirender::nodes::mapping::IN_TYPE,false))
 			return "mapping_type";
+		break;
 	}
-	else if(typeid(node) == typeid(ccl::MixNode))
+	case icycles::ShaderNodeType::Mix:
 	{
 		if(ustring::compare(inputName.c_str(),unirender::nodes::mix::IN_TYPE,false))
 			return "mix_type";
+		break;
 	}
-	else if(typeid(node) == typeid(ccl::VectorMathNode))
+	case icycles::ShaderNodeType::VectorMath:
 	{
 		if(ustring::compare(inputName.c_str(),unirender::nodes::vector_math::IN_TYPE,false))
 			return "math_type";
+		break;
 	}
-	else if(typeid(node) == typeid(ccl::VectorTransformNode))
+	case icycles::ShaderNodeType::VectorTransform:
 	{
 		if(ustring::compare(inputName.c_str(),unirender::nodes::vector_transform::IN_TYPE,false))
 			return "transform_type";
+		break;
+	}
 	}
 	return inputName;
 }
 
-template<typename TCcl,typename TEnum>
+template<icycles::ShaderNodeType nodeType,typename TEnum>
 	static bool apply_translated_socket_value(
 		const ccl::ShaderNode &shaderNode,const std::string &socketName,const std::string &targetSocketName,
 		const unirender::NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType
 	)
 {
-	if(typeid(shaderNode) != typeid(TCcl))
+	if(icycles::shader_node::get_type_enum(shaderNode) != nodeType)
 		return false;
 	if(!ustring::compare(socketName.c_str(),targetSocketName.c_str(),false))
 		return false;
@@ -726,59 +739,59 @@ template<typename TCcl,typename TEnum>
 		return false;
 	auto val = *static_cast<unirender::STEnum*>(sockDesc.dataValue.value.get());
 	val = unirender::cycles::to_ccl_enum<TEnum>(val);
-	node.set(sockType,val);
+	icycles::node::set_int(node,sockType,val);
 	return true;
 }
 
 void unirender::CCLShader::ApplySocketValue(const ccl::ShaderNode &shaderNode,const std::string &socketName,const NodeSocketDesc &sockDesc,ccl::Node &node,const ccl::SocketType &sockType)
 {
-	if(apply_translated_socket_value<ccl::MathNode,unirender::nodes::math::MathType>(shaderNode,socketName,"math_type",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::Math,unirender::nodes::math::MathType>(shaderNode,socketName,"math_type",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::MappingNode,unirender::nodes::mapping::Type>(shaderNode,socketName,"mapping_type",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::Mapping,unirender::nodes::mapping::Type>(shaderNode,socketName,"mapping_type",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::MixNode,unirender::nodes::mix::Mix>(shaderNode,socketName,"mix_type",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::Mix,unirender::nodes::mix::Mix>(shaderNode,socketName,"mix_type",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::VectorMathNode,unirender::nodes::vector_math::MathType>(shaderNode,socketName,"math_type",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::VectorMath,unirender::nodes::vector_math::MathType>(shaderNode,socketName,"math_type",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::VectorTransformNode,unirender::nodes::vector_transform::Type>(shaderNode,socketName,"transform_type",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::VectorTransform,unirender::nodes::vector_transform::Type>(shaderNode,socketName,"transform_type",sockDesc,node,sockType))
 		return;
 
-	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::InterpolationType>(shaderNode,socketName,"interpolation",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::ImageTexture,unirender::nodes::image_texture::InterpolationType>(shaderNode,socketName,"interpolation",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::ExtensionType>(shaderNode,socketName,"extension",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::ImageTexture,unirender::nodes::image_texture::ExtensionType>(shaderNode,socketName,"extension",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::Projection>(shaderNode,socketName,"projection",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::ImageTexture,unirender::nodes::image_texture::Projection>(shaderNode,socketName,"projection",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::ImageTextureNode,unirender::nodes::image_texture::AlphaType>(shaderNode,socketName,"alpha_type",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::ImageTexture,unirender::nodes::image_texture::AlphaType>(shaderNode,socketName,"alpha_type",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::VectorTransformNode,unirender::nodes::vector_transform::ConvertSpace>(shaderNode,socketName,"convert_from",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::VectorTransform,unirender::nodes::vector_transform::ConvertSpace>(shaderNode,socketName,"convert_from",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::VectorTransformNode,unirender::nodes::vector_transform::ConvertSpace>(shaderNode,socketName,"convert_to",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::VectorTransform,unirender::nodes::vector_transform::ConvertSpace>(shaderNode,socketName,"convert_to",sockDesc,node,sockType))
 		return;
-	if(apply_translated_socket_value<ccl::NormalMapNode,unirender::nodes::normal_map::Space>(shaderNode,socketName,"space",sockDesc,node,sockType))
+	if(apply_translated_socket_value<icycles::ShaderNodeType::NormalMap,unirender::nodes::normal_map::Space>(shaderNode,socketName,"space",sockDesc,node,sockType))
 		return;
 
 	switch(sockDesc.dataValue.type)
 	{
 	case SocketType::Bool:
 		static_assert(std::is_same_v<STBool,bool>);
-		node.set(sockType,*static_cast<STBool*>(sockDesc.dataValue.value.get()));
+		icycles::node::set_boolean(node,sockType,*static_cast<STBool*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::Float:
 		static_assert(std::is_same_v<STFloat,float>);
-		node.set(sockType,*static_cast<STFloat*>(sockDesc.dataValue.value.get()));
+		icycles::node::set_float(node,sockType,*static_cast<STFloat*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::Int:
 		static_assert(std::is_same_v<STInt,int32_t>);
-		node.set(sockType,*static_cast<STInt*>(sockDesc.dataValue.value.get()));
+		icycles::node::set_int(node,sockType,*static_cast<STInt*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::Enum:
 		static_assert(std::is_same_v<STEnum,int32_t>);
-		node.set(sockType,*static_cast<STEnum*>(sockDesc.dataValue.value.get()));
+		icycles::node::set_int(node,sockType,*static_cast<STEnum*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::UInt:
 		static_assert(std::is_same_v<STUInt,ccl::uint>);
-		node.set(sockType,*static_cast<STUInt*>(sockDesc.dataValue.value.get()));
+		icycles::node::set_uint(node,sockType,*static_cast<STUInt*>(sockDesc.dataValue.value.get()));
 		break;
 	case SocketType::Color:
 	case SocketType::Vector:
@@ -787,28 +800,28 @@ void unirender::CCLShader::ApplySocketValue(const ccl::ShaderNode &shaderNode,co
 	{
 		static_assert(std::is_same_v<STColor,Vector3> && std::is_same_v<STVector,Vector3> && std::is_same_v<STPoint,Vector3> && std::is_same_v<STNormal,Vector3>);
 		auto &v = *static_cast<STVector*>(sockDesc.dataValue.value.get());
-		node.set(sockType,ccl::float3{v.x,v.y,v.z});
+		icycles::node::set_float3(node,sockType,ccl::float3{v.x,v.y,v.z});
 		break;
 	}
 	case SocketType::Point2:
 	{
 		static_assert(std::is_same_v<STPoint2,Vector2>);
 		auto &v = *static_cast<STPoint2*>(sockDesc.dataValue.value.get());
-		node.set(sockType,ccl::float2{v.x,v.y});
+		icycles::node::set_float2(node,sockType,ccl::float2{v.x,v.y});
 		break;
 	}
 	case SocketType::String:
 	{
 		static_assert(std::is_same_v<STString,std::string>);
 		auto &v = *static_cast<std::string*>(sockDesc.dataValue.value.get());
-		node.set(sockType,v.c_str());
+		icycles::node::set_cstring(node,sockType,v.c_str());
 		break;
 	}
 	case SocketType::Transform:
 	{
 		static_assert(std::is_same_v<STTransform,Mat4x3>);
 		auto &v = *static_cast<Mat4x3*>(sockDesc.dataValue.value.get());
-		node.set(sockType,ccl::Transform{
+		icycles::node::set_transform(node,sockType,ccl::Transform{
 			v[0][0],v[0][1],v[0][2],
 			v[1][0],v[1][1],v[1][2],
 			v[2][0],v[2][1],v[2][2],
@@ -821,7 +834,7 @@ void unirender::CCLShader::ApplySocketValue(const ccl::ShaderNode &shaderNode,co
 		static_assert(std::is_same_v<STFloatArray,std::vector<STFloat>>);
 		auto &v = *static_cast<std::vector<STFloat>*>(sockDesc.dataValue.value.get());
 		auto cclArray = to_ccl_array<float,float>(v,[](const float &v) -> float {return v;});
-		node.set(sockType,cclArray);
+		icycles::node::set_float_a(node,sockType,cclArray);
 		break;
 	}
 	case SocketType::ColorArray:
@@ -829,7 +842,7 @@ void unirender::CCLShader::ApplySocketValue(const ccl::ShaderNode &shaderNode,co
 		static_assert(std::is_same_v<STColorArray,std::vector<STColor>>);
 		auto &v = *static_cast<std::vector<STColor>*>(sockDesc.dataValue.value.get());
 		auto cclArray = to_ccl_array<Vector3,ccl::float3>(v,[](const Vector3 &v) -> ccl::float3 {return ccl::float3{v.x,v.y,v.z};});
-		node.set(sockType,cclArray);
+		icycles::node::set_float3_a(node,sockType,cclArray);
 		break;
 	}
 	}
@@ -851,15 +864,15 @@ void unirender::CCLShader::ConvertGroupSocketsToNodes(const GroupNodeDesc &group
 			{
 				auto *nodeMath = static_cast<ccl::MathNode*>(AddNode(NODE_MATH));
 				assert(nodeMath);
-				nodeMath->set_math_type(ccl::NodeMathType::NODE_MATH_ADD);
-				nodeMath->set_value1(0.f);
-				nodeMath->set_value2(0.f);
+				icycles::math_node::set_math_type(*nodeMath,ccl::NodeMathType::NODE_MATH_ADD);
+				icycles::math_node::set_value1(*nodeMath,0.f);
+				icycles::math_node::set_value2(*nodeMath,0.f);
 
 				if(socketDesc.dataValue.value)
 				{
 					auto v = socketDesc.dataValue.ToValue<float>();
 					if(v.has_value())
-						nodeMath->set_value1(*v);
+						icycles::math_node::set_value1(*nodeMath,*v);
 				}
 				socketTranslation.input = {nodeMath,nodes::math::IN_VALUE1};
 				socketTranslation.output = {nodeMath,nodes::math::OUT_VALUE};
@@ -868,15 +881,15 @@ void unirender::CCLShader::ConvertGroupSocketsToNodes(const GroupNodeDesc &group
 			{
 				auto *nodeVec = static_cast<ccl::VectorMathNode*>(AddNode(NODE_VECTOR_MATH));
 				assert(nodeVec);
-				nodeVec->set_math_type(ccl::NodeVectorMathType::NODE_VECTOR_MATH_ADD);
-				nodeVec->set_vector1({0.f,0.f,0.f});
-				nodeVec->set_vector2({0.f,0.f,0.f});
+				icycles::vector_math_node::set_math_type(*nodeVec,ccl::NodeVectorMathType::NODE_VECTOR_MATH_ADD);
+				icycles::math_node::set_vector1(*nodeVec,{0.f,0.f,0.f});
+				icycles::math_node::set_vector2(*nodeVec,{0.f,0.f,0.f});
 
 				if(socketDesc.dataValue.value)
 				{
 					auto v = socketDesc.dataValue.ToValue<Vector3>();
 					if(v.has_value())
-						nodeVec->set_vector1({v->x,v->y,v->z});
+						icycles::math_node::set_vector1(*nodeVec,{v->x,v->y,v->z});
 				}
 				socketTranslation.input = {nodeVec,nodes::vector_math::IN_VECTOR1};
 				socketTranslation.output = {nodeVec,nodes::vector_math::OUT_VECTOR};
@@ -885,7 +898,7 @@ void unirender::CCLShader::ConvertGroupSocketsToNodes(const GroupNodeDesc &group
 			{
 				auto *mix = static_cast<ccl::MixClosureNode*>(AddNode(NODE_MIX_CLOSURE));
 				assert(mix);
-				mix->set_fac(0.f);
+				icycles::mix_closure_node::set_fac(*mix,0.f);
 
 				socketTranslation.input = {mix,nodes::mix_closure::IN_CLOSURE1};
 				socketTranslation.output = {mix,nodes::mix_closure::OUT_CLOSURE};
@@ -922,27 +935,49 @@ void unirender::CCLShader::InitializeNodeGraph(const GroupNodeDesc &desc)
 const ccl::SocketType *unirender::CCLShader::FindProperty(ccl::ShaderNode &node,const std::string &inputName)
 {
 	auto translatedInputName = TranslateInputName(node,inputName);
-	auto it = std::find_if(node.type->inputs.begin(),node.type->inputs.end(),[&translatedInputName](const ccl::SocketType &socketType) {
-		return ccl::string_iequals(socketType.name.string(),translatedInputName);
-	});
-	return (it != node.type->inputs.end()) ? &*it : nullptr;
+	auto *type = icycles::shader_node::get_type(node);
+	auto n = icycles::node_type::get_input_count(*type);
+	for(auto i=decltype(n){0u};i<n;++i)
+	{
+		auto &socketType = *icycles::node_type::get_input(*type,i);
+		icycles::CString socketTypeName {};
+		icycles::socket_type::get_name(socketType,&socketTypeName.cstr,socketTypeName.len);
+		if(icycles::util::string_iequals(socketTypeName.cstr,translatedInputName.c_str()))
+			return &socketType;
+	}
+	return nullptr;
 }
 ccl::ShaderInput *unirender::CCLShader::FindInput(ccl::ShaderNode &node,const std::string &inputName)
 {
 	// return node.input(ccl::ustring{inputName}); // Doesn't work in some cases for some reason
 	auto translatedInputName = TranslateInputName(node,inputName);
-	auto it = std::find_if(node.inputs.begin(),node.inputs.end(),[&translatedInputName](const ccl::ShaderInput *shInput) {
-		return ccl::string_iequals(shInput->socket_type.name.string(),translatedInputName);
-	});
-	return (it != node.inputs.end()) ? *it : nullptr;
+	auto n = icycles::shader_node::get_input_count(node);
+	for(auto i=decltype(n){0u};i<n;++i)
+	{
+		auto &input = *icycles::shader_node::get_input(node,i);
+		auto &socketType = icycles::shader_input::get_socket_type(input);
+		icycles::CString inputName {};
+		icycles::socket_type::get_name(socketType,&inputName.cstr,inputName.len);
+		if(icycles::util::string_iequals(inputName.cstr,translatedInputName.c_str()))
+			return &input;
+	}
+	return nullptr;
 }
 ccl::ShaderOutput *unirender::CCLShader::FindOutput(ccl::ShaderNode &node,const std::string &outputName)
 {
 	// return node.output(ccl::ustring{outputName}); // Doesn't work in some cases for some reason
-	auto it = std::find_if(node.outputs.begin(),node.outputs.end(),[&outputName](const ccl::ShaderOutput *shOutput) {
-		return ccl::string_iequals(shOutput->socket_type.name.string(),outputName);
-	});
-	return (it != node.outputs.end()) ? *it : nullptr;
+	auto n = icycles::shader_node::get_output_count(node);
+	for(auto i=decltype(n){0u};i<n;++i)
+	{
+		auto &output = *icycles::shader_node::get_output(node,i);
+		auto &socketType = icycles::shader_output::get_socket_type(output);
+		icycles::CString curOutputName {};
+		icycles::socket_type::get_name(socketType,&curOutputName.cstr,curOutputName.len);
+		if(icycles::util::string_iequals(curOutputName.cstr,outputName.c_str()))
+			return &output;
+	}
+	return nullptr;
 }
 
-std::string unirender::CCLShader::GetCurrentInternalNodeName() const {return "internal_" +std::to_string(m_cclGraph.nodes.size());}
+std::string unirender::CCLShader::GetCurrentInternalNodeName() const {return "internal_" +std::to_string(icycles::shader_graph::get_node_count(m_cclGraph));}
+#pragma optimize("",on)

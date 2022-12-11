@@ -6,6 +6,7 @@
 */
 
 #include "unirender/cycles/display_driver.hpp"
+#include "unirender/cycles/cycles_interface.hpp"
 #include <util_raytracing/tilemanager.hpp>
 #include <util_raytracing/denoise.hpp>
 #include <util_image.hpp>
@@ -25,6 +26,16 @@ static void dump_image_file(const std::string &name,uimg::ImageBuffer &imgBuf)
 		fsys::File fp {f};
 		uimg::save_image(fp,imgBuf,uimg::ImageFormat::HDR,1.f);
 	}
+}
+
+ccl::OutputDriver *icycles::OutputDriver::CreateDriver()
+{
+	return icycles::output_driver::create(
+		shared_from_this(),
+		[](void *userData,const Tile &tile) {static_cast<OutputDriver*>(userData)->write_render_tile(tile);},
+		[](void *userData,const Tile &tile) -> bool {return static_cast<OutputDriver*>(userData)->update_render_tile(tile);},
+		[](void *userData,const Tile &tile) -> bool {return static_cast<OutputDriver*>(userData)->read_render_tile(tile);}
+	);
 }
 
 unirender::cycles::BaseDriver::BaseDriver(uint32_t width,uint32_t height)
@@ -241,7 +252,7 @@ void unirender::cycles::OutputDriver::write_render_tile(const Tile &tile)
 	{
 		auto &imgBuf = pair.second;
 		assert(imgBuf->IsFloatFormat());
-		if(!tile.get_pass_pixels(pair.first,imgBuf->GetChannelCount(),reinterpret_cast<float*>(m_tileData.data())))
+		if(!icycles::output_driver_tile::get_pass_pixels(tile,pair.first.c_str(),imgBuf->GetChannelCount(),reinterpret_cast<float*>(m_tileData.data())))
 			continue;
 		memcpy(imgBuf->GetData(),m_tileData.data(),util::size_of_container(m_tileData));
 	}
@@ -276,10 +287,12 @@ bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
 		return false;
 	auto &bakeData = *m_bakeData;
 
-	auto w = tile.size.x;
-	auto h = tile.size.y;
-	auto x = tile.offset.x;
-	auto y = tile.offset.y;
+	auto &tileSize = icycles::output_driver_tile::get_size(const_cast<Tile&>(tile));
+	auto &tileOffset = icycles::output_driver_tile::get_offset(const_cast<Tile&>(tile));
+	auto w = tileSize.x;
+	auto h = tileSize.y;
+	auto x = tileOffset.x;
+	auto y = tileOffset.y;
 	std::vector<float> primitiveData;
 	std::vector<float> differentialData;
 	primitiveData.resize(w *h *4);
@@ -322,8 +335,8 @@ bool unirender::cycles::OutputDriver::read_render_tile(const Tile &tile)
 
 	auto imgPrimitive = uimg::ImageBuffer::Create(primitiveData.data(),w,h,uimg::Format::RGBA32,true);
 	auto imgDifferential = uimg::ImageBuffer::Create(differentialData.data(),w,h,uimg::Format::RGBA32,true);
-	tile.set_pass_pixels("BakePrimitive",imgPrimitive->GetChannelCount(),reinterpret_cast<float*>(imgPrimitive->GetData()));
-	tile.set_pass_pixels("BakeDifferential",imgDifferential->GetChannelCount(),reinterpret_cast<float*>(imgDifferential->GetData()));
+	icycles::output_driver_tile::set_pass_pixels(tile,"BakePrimitive",imgPrimitive->GetChannelCount(),reinterpret_cast<float*>(imgPrimitive->GetData()));
+	icycles::output_driver_tile::set_pass_pixels(tile,"BakeDifferential",imgDifferential->GetChannelCount(),reinterpret_cast<float*>(imgDifferential->GetData()));
 	return true;
 }
 #pragma optimize("",on)

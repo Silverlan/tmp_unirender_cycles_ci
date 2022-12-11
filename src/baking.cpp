@@ -19,8 +19,8 @@
 #include "util_raytracing/object.hpp"
 #include "util_raytracing/scene.hpp"
 #include "unirender/cycles/renderer.hpp"
+#include "icycles.hpp"
 #include <sharedutils/util_baking.hpp>
-#include <scene/mesh.h>
 
 void unirender::baking::prepare_bake_data(
 	const cycles::Renderer &renderer,unirender::Object &o,util::baking::BakePixel *pixelArray,uint32_t numPixels,
@@ -32,7 +32,7 @@ void unirender::baking::prepare_bake_data(
 	
 	auto &mesh = o.GetMesh();
 	auto *cclMesh = renderer.FindCclMesh(mesh);
-	auto &tris = cclMesh->get_triangles();
+	auto &tris = icycles::mesh::get_triangles(*cclMesh);
 	auto &uvs = useLightmapUvs ? mesh.GetLightmapUvs() : mesh.GetUvs();
 	auto numTris = tris.size() /3;
 

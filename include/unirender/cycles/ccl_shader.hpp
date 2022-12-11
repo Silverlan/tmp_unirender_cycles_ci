@@ -27,7 +27,7 @@ namespace unirender
 		ccl::NodeMathType to_ccl_type(unirender::nodes::math::MathType type);
 		ccl::NodeVectorMathType to_ccl_type(unirender::nodes::vector_math::MathType type);
 		ccl::NodeVectorTransformType to_ccl_type(unirender::nodes::vector_transform::Type type);
-		ccl::ustring to_ccl_type(unirender::ColorSpace space);
+		std::string to_ccl_type(unirender::ColorSpace space);
 		ccl::NodeEnvironmentProjection to_ccl_type(unirender::EnvironmentProjection projection);
 		ccl::ClosureType to_ccl_type(unirender::ClosureType type);
 		ccl::ImageAlphaType to_ccl_type(unirender::nodes::image_texture::AlphaType type);

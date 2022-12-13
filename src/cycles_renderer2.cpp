@@ -996,7 +996,7 @@ void unirender::cycles::Renderer::SetupRenderSettings(
 	integrator.set_caustics_refractive(true);
 	integrator.set_filter_glossy(0.f);
 	integrator.set_seed(0);
-	integrator.set_sampling_pattern(ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL);
+	integrator.set_sampling_pattern(ccl::SamplingPattern::SAMPLING_PATTERN_SOBOL_BURLEY);
 
 	auto useAdaptiveSampling = sceneInfo.useAdaptiveSampling;
 	auto adaptiveSamplingThreshold = sceneInfo.adaptiveSamplingThreshold;

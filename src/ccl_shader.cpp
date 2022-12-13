@@ -347,7 +347,7 @@ ccl::NodeMix unirender::cycles::to_ccl_type(unirender::nodes::mix::Mix mix)
 	case unirender::nodes::mix::Mix::Val:
 		return ccl::NodeMix::NODE_MIX_VAL;
 	case unirender::nodes::mix::Mix::Color:
-		return ccl::NodeMix::NODE_MIX_COLOR;
+		return ccl::NodeMix::NODE_MIX_COL;
 	case unirender::nodes::mix::Mix::Soft:
 		return ccl::NodeMix::NODE_MIX_SOFT;
 	case unirender::nodes::mix::Mix::Linear:

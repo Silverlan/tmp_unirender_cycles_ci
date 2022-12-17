@@ -599,7 +599,19 @@ void unirender::cycles::Renderer::SyncMesh(const unirender::Mesh &mesh)
 		cclMesh->add_triangle(tris[i],tris[i +1],tris[i +2],shaderIds[i /3],smooth[i /3]);
 
 	auto fToFloat4 = [](const ccl::float3 &v) -> ccl::float4 {return ccl::float4{v.x,v.y,v.z,0.f};};
-	initialize_attribute<Vector3,ccl::float4>(*cclMesh,ccl::ATTR_STD_VERTEX_NORMAL,mesh.GetVertexNormals(),[&fToFloat4](const Vector3 &v) -> ccl::float4 {return fToFloat4(ToCyclesNormal(v));});
+	auto nrmDbgHandler = GetScene().GetDebugHandler("normal");
+	if(nrmDbgHandler)
+	{
+		auto pData = std::make_shared<Vector3>();
+		initialize_attribute<Vector3,ccl::float4>(*cclMesh,ccl::ATTR_STD_VERTEX_NORMAL,mesh.GetVertexNormals(),[&fToFloat4,&nrmDbgHandler,&pData](const Vector3 &v) -> ccl::float4 {
+			*pData = v;
+			nrmDbgHandler(pData);
+			auto n = *pData;
+			return fToFloat4(ccl::float3{n.x,n.y,n.z});
+		});
+	}
+	else
+		initialize_attribute<Vector3,ccl::float4>(*cclMesh,ccl::ATTR_STD_VERTEX_NORMAL,mesh.GetVertexNormals(),[&fToFloat4](const Vector3 &v) -> ccl::float4 {return fToFloat4(ToCyclesNormal(v));});
 	initialize_attribute<Vector2,ccl::float2>(*cclMesh,ccl::ATTR_STD_UV,mesh.GetUvs(),[](const Vector2 &v) -> ccl::float2 {return ToCyclesUV(v);});
 	initialize_attribute<Vector3,ccl::float3>(*cclMesh,ccl::ATTR_STD_UV_TANGENT,mesh.GetUvTangents(),[](const Vector3 &v) -> ccl::float3 {return ToCyclesNormal(v);});
 	initialize_attribute<float,float>(*cclMesh,ccl::ATTR_STD_UV_TANGENT_SIGN,mesh.GetUvTangentSigns(),[](const float &v) -> float {return v;});

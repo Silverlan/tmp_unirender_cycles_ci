@@ -1,0 +1,95 @@
+name: Build Linux
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: environment-lin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build - ${{ matrix.config.os }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: ubuntu-22.04
+            name: "Ubuntu GCC-11"
+            artifact: "ubuntu_gcc.7z"
+            build_type: "RelWithDebInfo"
+            cc: "clang-14"
+            cxx: "clang++-14"
+            archiver: "7z a"
+            generators: "Unix Makefiles"
+            build_dir: 'build'
+    steps:
+      - name: Setup Pragma
+        uses: Silverlan/pragma/github_actions/setup@master
+        
+      - name: Build Dependencies
+        uses: Silverlan/pragma/github_actions/build@master
+        id: build-deps
+        with:
+          # This will build the core dependencies, as well as cycles, but not Pragma
+          build-args: "--module pr_unirender:https://github.com/Silverlan/pr_cycles.git --build 0"
+
+      - name: Build UniRender_cycles
+        shell: bash
+        run: |
+          root="$PWD"
+          cd "${{ steps.build-deps.outputs.build-dir }}"
+          cmake --build "." --config "RelWithDebInfo" --target UniRender_cycles
+          
+          cd $root
+          mkdir -p release/modules/unirender/cycles
+          releaseDir="$root/release"
+          pragmaDir="${{ steps.build-deps.outputs.root-dir }}"
+          depsDir="${{ steps.build-deps.outputs.deps-dir }}"
+          buildDir="${{ steps.build-deps.outputs.build-dir }}"
+          cyclesDir="$releaseDir/modules/unirender/cycles"
+          
+          copy_binary () {
+             cmake -DInstallSrc="$1" -DInstallDst="$cyclesDir/" -P $pragmaDir/build_scripts/cmake/install_file.cmake
+          }
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_atomic.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_chrono.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_date_time.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_filesystem.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_regex.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_serialization.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_system.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_thread.so"
+          copy_binary "$depsDir/boost_1_78_0/stage/lib/libboost_wave.so"
+          copy_binary "$depsDir/lib/linux_x86_64/openexr-3.1/lib/libIex.so"
+          copy_binary "$depsDir/lib/linux_x86_64/openexr-3.1/lib/libIlmThread.so"
+          copy_binary "$depsDir/lib/linux_x86_64/Imath/build/src/Imath/libImath-3_1.so"
+          copy_binary "$depsDir/lib/linux_x86_64/ocio-2.1/lib/libOpenColorIO.so"
+          copy_binary "$depsDir/lib/linux_x86_64/openexr-3.1/lib/libOpenEXR.so"
+          copy_binary "$depsDir/lib/linux_x86_64/openexr-3.1/lib/libOpenEXRCore.so"
+          copy_binary "$depsDir/lib/linux_x86_64/openexr-3.1/lib/libOpenEXRUtil.so"
+          copy_binary "$depsDir/lib/linux_x86_64/oiio-2.3/lib/libOpenImageIO.so"
+          copy_binary "$depsDir/lib/linux_x86_64/oiio-2.3/lib/libOpenImageIO_Util.so"
+          copy_binary "$depsDir/lib/linux_x86_64/openvdb-9.0/lib/libopenvdb.so"
+          copy_binary "$depsDir/lib/linux_x86_64/osl-1.12/lib/liboslcomp.so"
+          copy_binary "$depsDir/lib/linux_x86_64/osl-1.12/lib/liboslexec.so"
+          copy_binary "$depsDir/lib/linux_x86_64/osl-1.12/lib/liboslnoise.so"
+          copy_binary "$depsDir/lib/linux_x86_64/osl-1.12/lib/liboslquery.so"
+          copy_binary "$depsDir/lib/linux_x86_64/tiff/build/libtiff/libtiff.so"
+          copy_binary "$buildDir/modules/pr_unirender/external_libs/cycles/libUniRender_cycles.so"
+          
+          mkdir -p "$cyclesDir/source"
+          cp -r "$depsDir/cycles/src/kernel" "$cyclesDir/source/kernel"
+          cp -r "$depsDir/cycles/src/util" "$cyclesDir/source/util"
+          
+          cp -r "$depsDir/cycles/build/src/kernel/*.ptx" "$cyclesDir/source/kernel"
+          cp -r "$depsDir/cycles/build/src/kernel/*.cubin" "$cyclesDir/source/kernel"
+
+      - name: Release Binaries
+        uses: Silverlan/common_actions/release_nightly_binaries@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit: ${{ github.ref_name }}

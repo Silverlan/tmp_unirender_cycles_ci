@@ -1,0 +1,74 @@
+name: Build Windows
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: environment-win-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build - ${{ matrix.config.os }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: windows-latest
+            name: "Windows x64 MSVC"
+            artifact: "Windows-MSVC.tar.xz"
+            build_type: "RelWithDebInfo"
+            environment_script: "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
+            cc: "cl"
+            cxx: "cl"
+            archiver: "7z a"
+            generators: "Visual Studio 16 2022"
+            build_dir: 'build'
+    steps:
+      - name: Setup Pragma
+        uses: Silverlan/pragma/github_actions/setup@master
+        
+      - name: Build Dependencies
+        uses: Silverlan/pragma/github_actions/build@master
+        id: build-deps
+        with:
+          # This will build the core dependencies, as well as cycles, but not Pragma
+          build-args: "--module pr_unirender:https://github.com/Silverlan/pr_cycles.git --build 0"
+
+      - name: Build UniRender_cycles
+        shell: bash
+        run: |
+          root="$PWD"
+          cd "${{ steps.build-deps.outputs.build-dir }}"
+          cmake --build "." --config "RelWithDebInfo" --target UniRender_cycles
+          
+          cd $root
+          mkdir -p release/modules/unirender/cycles
+          releaseDir="$root/release"
+          pragmaDir="${{ steps.build-deps.outputs.root-dir }}"
+          depsDir="${{ steps.build-deps.outputs.deps-dir }}"
+          buildDir="${{ steps.build-deps.outputs.build-dir }}"
+          cyclesDir="$releaseDir/modules/unirender/cycles"
+          
+          copy_binary () {
+             cmake -DInstallSrc="$1" -DInstallDst="$cyclesDir/" -P $pragmaDir/build_scripts/cmake/install_file.cmake
+          }
+          copy_binary "$depsDir/glog/build/RelWithDebInfo/glog.dll"
+          copy_binary "$depsDir/lib/win64_vc15/openvdb/bin/openvdb.dll"
+          copy_binary "$buildDir/modules/pr_unirender/external_libs/cycles/RelWithDebInfo/UniRender_cycles.dll"
+          
+          mkdir -p "$cyclesDir/source"
+          cp -r "$depsDir/cycles/src/kernel" "$cyclesDir/source/kernel"
+          cp -r "$depsDir/cycles/src/util" "$cyclesDir/source/util"
+          
+          cp -r "$depsDir/cycles/build/src/kernel/*.ptx" "$cyclesDir/source/kernel"
+          cp -r "$depsDir/cycles/build/src/kernel/*.cubin" "$cyclesDir/source/kernel"
+        
+      - name: Release Binaries
+        uses: Silverlan/common_actions/release_nightly_binaries@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit: ${{ github.ref_name }}

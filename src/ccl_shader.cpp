@@ -487,6 +487,7 @@ std::unique_ptr<unirender::CCLShader::BaseNodeWrapper> unirender::CCLShader::Res
 		wrapper->imageTexNode = static_cast<ccl::ImageTextureNode*>(AddNode(unirender::NODE_IMAGE_TEXTURE));
 		assert(wrapper->imageTexNode);
 		wrapper->imageTexNode->set_colorspace(ccl::u_colorspace_raw);
+		wrapper->imageTexNode->set_alpha_type(ccl::ImageAlphaType::IMAGE_ALPHA_IGNORE);
 
 		auto *sep = static_cast<ccl::SeparateRGBNode*>(AddNode(unirender::NODE_SEPARATE_RGB));
 		m_cclGraph.connect(FindOutput(*wrapper->imageTexNode,unirender::nodes::image_texture::OUT_COLOR),FindInput(*sep,unirender::nodes::separate_rgb::IN_COLOR));

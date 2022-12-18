@@ -64,8 +64,8 @@ jobs:
           cp -r "$depsDir/cycles/src/kernel" "$cyclesDir/source/kernel"
           cp -r "$depsDir/cycles/src/util" "$cyclesDir/source/util"
           
-          cp -r "$depsDir/cycles/build/src/kernel/*.ptx" "$cyclesDir/source/kernel"
-          cp -r "$depsDir/cycles/build/src/kernel/*.cubin" "$cyclesDir/source/kernel"
+          cp "$depsDir/cycles/build/src/kernel/*.ptx" "$cyclesDir/source/kernel/"
+          cp "$depsDir/cycles/build/src/kernel/*.cubin" "$cyclesDir/source/kernel/"
         
       - name: Release Binaries
         uses: Silverlan/common_actions/release_nightly_binaries@main

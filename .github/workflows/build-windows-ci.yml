@@ -31,11 +31,6 @@ jobs:
       - name: Setup Pragma
         uses: Silverlan/tmp_pragma_ci/github_actions/setup@master
         
-      - name: Install Cuda
-        uses: Jimver/cuda-toolkit@v0.2.8
-        with:
-          cuda: '10.2.89'
-        
       - name: Build Dependencies
         uses: Silverlan/tmp_pragma_ci/github_actions/build@master
         id: build-deps
